@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quality Inspection</title>
+<style>
+  :root {
+    --bg: #f3f4f6; --card: #ffffff; --ink: #1c2230; --muted: #5d6677; --line: #dde1e8;
+    --accent: #2f6fd6; --ok: #1f8a4c; --ok-bg: #e3f4ea; --nok: #c7322b; --nok-bg: #fbe6e4;
+    --warn: #b7791f; --warn-bg: #fdf3dc; --chip: #eef1f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --card: #1b2029; --ink: #e7eaf0; --muted: #98a1b2; --line: #2c3340;
+      --accent: #6aa0ff; --ok: #4cc27d; --ok-bg: #173324; --nok: #ff6b61; --nok-bg: #3a1d1b;
+      --warn: #f0b457; --warn-bg: #3a2e17; --chip: #242b36;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; background: var(--card);
+           border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+  header .meta { color: var(--muted); font-size: 13px; }
+  .pill { padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 650; background: var(--chip); }
+  .pill.inspecting { background: var(--ok-bg); color: var(--ok); }
+  .pill.learning, .pill.training { background: var(--warn-bg); color: var(--warn); }
+  main { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(300px, 1fr); gap: 16px; padding: 16px 20px; }
+  @media (max-width: 980px) { main { grid-template-columns: 1fr; padding: 12px 16px; } }
+  .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 10px; font-weight: 650; }
+  .live img { width: 100%; display: block; border-radius: 6px; background: #000; aspect-ratio: 4/3; object-fit: contain; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row + .row { margin-top: 8px; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--chip); color: var(--ink);
+           padding: 7px 12px; border-radius: 7px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { color: var(--nok); }
+  button:disabled { opacity: .45; cursor: default; }
+  input, select { font: inherit; padding: 7px 9px; border-radius: 7px; border: 1px solid var(--line);
+                  background: var(--card); color: var(--ink); min-width: 0; }
+  input[type=text] { flex: 1; }
+  label.check { display: flex; gap: 6px; align-items: center; }
+  .result-head { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
+  .badge { font-size: 26px; font-weight: 800; padding: 4px 18px; border-radius: 8px; letter-spacing: 1px; }
+  .badge.OK { background: var(--ok-bg); color: var(--ok); }
+  .badge.NOK { background: var(--nok-bg); color: var(--nok); }
+  .badge.none, .badge.NO_PART { background: var(--chip); color: var(--muted); font-size: 16px; }
+  .imgs { display: grid; grid-template-columns: 1.3fr 1fr; gap: 10px; }
+  @media (max-width: 640px) { .imgs { grid-template-columns: 1fr; } }
+  .imgs img { width: 100%; border-radius: 6px; background: var(--chip); display: block; }
+  ol.defects { margin: 10px 0 0; padding-left: 20px; }
+  ol.defects li { margin: 3px 0; }
+  ol.defects .d { color: var(--muted); font-size: 12.5px; }
+  .scores { display: grid; grid-template-columns: auto 1fr auto; gap: 6px 10px; align-items: center; margin-top: 12px; font-size: 13px; }
+  .bar { height: 8px; background: var(--chip); border-radius: 4px; position: relative; overflow: hidden; }
+  .bar i { position: absolute; inset: 0 auto 0 0; background: var(--ok); border-radius: 4px; }
+  .bar i.bad { background: var(--nok); }
+  .bar::after { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--muted); opacity: .6; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align: center; }
+  .stats b { display: block; font-size: 24px; }
+  .stats .ok b { color: var(--ok); } .stats .nok b { color: var(--nok); }
+  .progress { height: 10px; background: var(--chip); border-radius: 5px; overflow: hidden; }
+  .progress i { display: block; height: 100%; background: var(--warn); transition: width .3s; }
+  .thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 6px; margin-top: 10px; }
+  .thumbs img { width: 100%; border-radius: 4px; cursor: pointer; border: 2px solid transparent; }
+  .thumbs img:hover { border-color: var(--nok); }
+  .hint { color: var(--muted); font-size: 12.5px; margin: 6px 0 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  tbody tr { cursor: pointer; } tbody tr:hover { background: var(--chip); }
+  .tag { font-weight: 700; font-size: 12px; } .tag.OK { color: var(--ok); } .tag.NOK { color: var(--nok); }
+  .models .m { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+  .models .m.active { border-color: var(--accent); }
+  .models .m .n { font-weight: 650; } .models .m .s { color: var(--muted); font-size: 12.5px; }
+  .msgs { max-height: 220px; overflow: auto; font-size: 12.5px; }
+  .msgs div { padding: 3px 0; border-bottom: 1px dashed var(--line); }
+  .msgs .warn { color: var(--warn); } .msgs .error { color: var(--nok); } .msgs .ok { color: var(--ok); }
+  details summary { cursor: pointer; color: var(--muted); margin-top: 8px; }
+  .settings { display: grid; gap: 6px; margin-top: 8px; }
+  .settings select { width: 100%; }
+  .hidden { display: none !important; }
+  .toast.ok { background: var(--ok); }
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--nok); color: #fff;
+           padding: 9px 16px; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.25); z-index: 10; }
+  .archives .a { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-top: 8px;
+                 display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+  .archives .a .n { font-weight: 600; word-break: break-all; } .archives .a .s { color: var(--muted); font-size: 12.5px; }
+  a.btn { font: inherit; border: 1px solid var(--line); background: var(--chip); color: var(--ink); padding: 7px 12px;
+          border-radius: 7px; text-decoration: none; }
+  a.btn:hover { border-color: var(--accent); }
+  pre.report { white-space: pre-wrap; font-size: 12px; background: var(--chip); padding: 8px; border-radius: 6px; max-height: 260px; overflow: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AI Quality Inspection · Metal Parts</h1>
+  <span class="pill" id="mode">–</span>
+  <span class="meta" id="cam"></span>
+  <span class="meta" id="activeModel"></span>
+</header>
+
+<main>
+  <div class="col">
+    <section class="card live">
+      <h2>Live view</h2>
+      <img id="live" src="stream.mjpg" alt="Camera image">
+      <div class="row" style="margin-top:10px">
+        <button id="btnCapture" title="Capture without the trigger (e.g. when the conveyor is stopped)">Manual capture</button>
+        <span class="hint" id="triggerHint"></span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Latest inspection result</h2>
+      <div class="result-head">
+        <span class="badge none" id="resBadge">–</span>
+        <div>
+          <div id="resTitle">No inspection yet</div>
+          <div class="hint" id="resMeta"></div>
+        </div>
+      </div>
+      <div class="imgs" id="resImgs">
+        <img id="resOverlay" alt="">
+        <img id="resDetail" alt="">
+      </div>
+      <ol class="defects" id="resDefects"></ol>
+      <div class="scores" id="resScores"></div>
+    </section>
+
+    <section class="card">
+      <h2>History</h2>
+      <table>
+        <thead><tr><th>Time</th><th>Result</th><th>Defects</th><th id="gtHead">Expected</th><th>ms</th></tr></thead>
+        <tbody id="history"></tbody>
+      </table>
+    </section>
+  </div>
+
+  <div class="col">
+    <section class="card">
+      <h2>Statistics</h2>
+      <div class="stats">
+        <div class="ok"><b id="cOK">0</b>OK</div>
+        <div class="nok"><b id="cNOK">0</b>NOK</div>
+        <div><b id="cRate">–</b>NOK rate</div>
+      </div>
+      <div class="row" style="margin-top:10px"><button id="btnReset">Reset counters</button></div>
+    </section>
+
+    <section class="card archives">
+      <h2>Results archive</h2>
+      <p class="hint" id="pendingInfo" style="margin-top:0"></p>
+      <div class="row">
+        <input type="text" id="archiveLabel" placeholder="Batch name (default: model name)">
+        <button class="primary" id="btnArchive" title="Pack all results into a ZIP file and empty the results folder">Archive &amp; clear results</button>
+      </div>
+      <p class="hint">When a batch is finished: stop the inspection, then archive. The ZIP contains the inspection log,
+        the saved NOK images and a summary. Counters and history are reset for the next batch.</p>
+      <div id="archiveList"></div>
+    </section>
+
+    <section class="card" id="learnCard">
+      <h2>Learning mode</h2>
+      <div id="learnIdle">
+        <div class="row">
+          <input type="text" id="learnName" placeholder="Part type, e.g. plate-2-holes">
+          <button class="primary" id="btnLearnStart">Start</button>
+        </div>
+        <p class="hint">Then run 10–20 defect-free parts over the conveyor. Each part is captured automatically when it passes the centre of the image.</p>
+      </div>
+      <div id="learnActive" class="hidden">
+        <div class="row" style="justify-content:space-between"><b id="learnTitle"></b><span id="learnCount"></span></div>
+        <div class="progress" style="margin-top:6px"><i id="learnBar" style="width:0"></i></div>
+        <div class="thumbs" id="thumbs"></div>
+        <p class="hint">Click a thumbnail to remove it (e.g. if a defective part slipped in).</p>
+        <details>
+          <summary>Inspection methods &amp; image representation</summary>
+          <div class="settings" id="methodSettings"></div>
+        </details>
+        <div class="row" style="margin-top:10px">
+          <button class="primary" id="btnLearnFinish">Finish &amp; create model</button>
+          <button id="btnLearnCancel" class="danger">Cancel</button>
+        </div>
+      </div>
+      <div id="learnTraining" class="hidden"><p>Training model …</p></div>
+    </section>
+
+    <section class="card">
+      <h2>Inspection mode</h2>
+      <div class="row">
+        <select id="modelSelect" style="flex:1"></select>
+        <button class="primary" id="btnInspStart">Start</button>
+        <button id="btnInspStop">Stop</button>
+      </div>
+    </section>
+
+    <section class="card models">
+      <h2>Models</h2>
+      <div id="models"></div>
+      <pre class="report hidden" id="report"></pre>
+    </section>
+
+    <section class="card hidden" id="simCard">
+      <h2>Simulator</h2>
+      <div class="settings">
+        <label>Lighting
+          <select id="simLight"><option value="front">Front light (lamp above the belt)</option><option value="back">Backlight (lamp below the belt)</option></select>
+        </label>
+        <label>Part type
+          <select id="simPart"><option value="A">A – plate with two holes</option><option value="B">B – hole + slot</option>
+            <option value="C">C – triangle with three holes</option><option value="D">D – square with four holes</option></select>
+        </label>
+        <label>Rotation on the belt
+          <select id="simAngle"><option value="0">Roughly aligned (±6°, sometimes 180°)</option><option value="1">Any rotation (0–360°)</option></select>
+        </label>
+        <label>Defect rate: <span id="simRateVal"></span>
+          <input type="range" id="simRate" min="0" max="1" step="0.05" style="width:100%">
+        </label>
+      </div>
+      <p class="hint">Lighting and part type change the image – existing models will no longer match (teach in again).</p>
+    </section>
+
+    <section class="card">
+      <h2>Messages</h2>
+      <div class="msgs" id="msgs"></div>
+    </section>
+  </div>
+</main>
+
+<script>
+const token = new URLSearchParams(location.search).get("token") || "";
+const $ = (id) => document.getElementById(id);
+let opts = null, lastImageId = null, selectedResult = null, lastModelsKey = "", status = null;
+
+async function api(path, method = "GET", body) {
+  const r = await fetch(path, {
+    method, headers: { "Content-Type": "application/json", "X-QC-Token": token },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || data.ok === false) { toast(data.error || `Error ${r.status}`); throw new Error(data.error); }
+  return data;
+}
+
+function toast(text, kind) {
+  const t = document.createElement("div"); t.className = "toast" + (kind === "ok" ? " ok" : ""); t.textContent = text;
+  document.body.appendChild(t); setTimeout(() => t.remove(), 4000);
+}
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const MODE = { idle: "Ready", learning: "Learning", training: "Training", inspecting: "Inspection running" };
+
+function methodSettings() {
+  const d = opts.defaults;
+  const checks = Object.entries(opts.methods).map(([k, v]) =>
+    `<label class="check"><input type="checkbox" name="method" value="${k}" ${d.methods.includes(k) ? "checked" : ""}> ${esc(v)}</label>`).join("");
+  const sel = (id, cur) => `<select id="${id}">` + Object.entries(opts.representations).map(([k, v]) =>
+    `<option value="${k}" ${k === cur ? "selected" : ""}>${esc(v)}</option>`).join("") + "</select>";
+  $("methodSettings").innerHTML = checks +
+    `<label>Representation for reference comparison ${sel("diffRep", d.diff_representation)}</label>` +
+    `<label>Representation for ML anomaly detection ${sel("pcaRep", d.pca_representation)}</label>`;
+}
+
+function currentMethodSettings() {
+  return {
+    methods: [...document.querySelectorAll('input[name=method]:checked')].map((e) => e.value),
+    diff_representation: $("diffRep").value, pca_representation: $("pcaRep").value,
+  };
+}
+
+function showResult(r) {
+  if (!r) return;
+  $("resBadge").className = "badge " + r.status;
+  $("resBadge").textContent = r.status === "NO_PART" ? "no part" : r.status;
+  $("resTitle").textContent = `Model: ${r.model}`;
+  const gt = r.ground_truth ? ` · Expected: ${r.ground_truth}` : "";
+  $("resMeta").textContent = `${r.timestamp.replace("T", " ").slice(0, 19)} · ${r.time_ms} ms${gt}`;
+  if (r.image_id) {
+    $("resOverlay").src = `api/results/${r.image_id}/overlay.jpg`;
+    $("resDetail").src = `api/results/${r.image_id}/detail.jpg`;
+  }
+  $("resImgs").classList.toggle("hidden", !r.image_id);
+  $("resDefects").innerHTML = r.defects.map((d) =>
+    `<li><b>${esc(d.label)}</b> <span class="d">– ${esc(d.detail)} (${esc(opts.methods[d.method] || d.method)})</span></li>`).join("");
+  $("resScores").innerHTML = r.methods.map((m) => {
+    const w = Math.min(100, m.score * 50);
+    return `<span>${esc(m.label)}</span><div class="bar"><i class="${m.ok ? "" : "bad"}" style="width:${w}%"></i></div><span>${m.score.toFixed(2)}</span>`;
+  }).join("");
+}
+
+function render(s) {
+  status = s;
+  $("mode").textContent = MODE[s.mode] || s.mode;
+  $("mode").className = "pill " + s.mode;
+  $("cam").textContent = `${s.camera} · ${s.fps} fps`;
+  $("activeModel").textContent = s.model ? `Model: ${s.model.name}` : "no model loaded";
+  $("triggerHint").textContent = s.continuous
+    ? (s.mode === "idle" ? "Trigger inactive (start learning or inspection mode first)" : s.armed ? "Trigger armed – waiting for the next part" : "Part captured – waiting until it leaves the image")
+    : "Image folder: automatic in inspection mode, click to capture in learning mode";
+  $("btnCapture").disabled = !["learning", "inspecting"].includes(s.mode);
+
+  const c = s.counts, total = c.OK + c.NOK;
+  $("cOK").textContent = c.OK; $("cNOK").textContent = c.NOK;
+  $("cRate").textContent = total ? `${(100 * c.NOK / total).toFixed(1)} %` : "–";
+
+  $("learnIdle").classList.toggle("hidden", s.mode === "learning" || s.mode === "training");
+  $("learnActive").classList.toggle("hidden", s.mode !== "learning");
+  $("learnTraining").classList.toggle("hidden", s.mode !== "training");
+  $("btnLearnStart").disabled = s.mode !== "idle";
+  if (s.mode === "learning") {
+    const L = s.learning;
+    $("learnTitle").textContent = L.name;
+    $("learnCount").textContent = `${L.count} / ${L.target} reference images`;
+    $("learnBar").style.width = Math.min(100, 100 * L.count / L.target) + "%";
+    const th = $("thumbs");
+    if (th.children.length !== L.count) {
+      th.innerHTML = Array.from({ length: L.count }, (_, i) =>
+        `<img src="api/learn/thumb/${i}.jpg?v=${L.count}" title="Remove image ${i + 1}" data-i="${i}">`).join("");
+    }
+    $("btnLearnFinish").disabled = L.count < 3;
+  }
+  $("btnInspStart").disabled = !["idle"].includes(s.mode);
+  $("btnInspStop").disabled = s.mode !== "inspecting";
+
+  $("simCard").classList.toggle("hidden", !s.sim);
+  $("gtHead").classList.toggle("hidden", !s.sim);
+  if (s.sim && document.activeElement?.closest("#simCard") == null) {
+    $("simLight").value = s.sim.lighting; $("simPart").value = s.sim.part_type; $("simAngle").value = s.sim.any_angle ? "1" : "0";
+    $("simRate").value = s.sim.defect_rate; $("simRateVal").textContent = Math.round(s.sim.defect_rate * 100) + " %";
+  }
+
+  $("msgs").innerHTML = s.messages.map((m) => `<div class="${m.level}">${m.t} · ${esc(m.text)}</div>`).join("");
+
+  if (s.last_result && s.last_result.image_id !== lastImageId && !selectedResult) {
+    lastImageId = s.last_result.image_id; showResult(s.last_result); loadHistory(); loadArchives();
+  }
+  const key = (s.model?.slug || "") + s.mode;
+  if (key !== lastModelsKey) { lastModelsKey = key; loadModels(); loadArchives(); }
+  $("btnArchive").disabled = s.mode === "inspecting" || s.mode === "training" || !pendingParts;
+  $("btnArchive").title = s.mode === "inspecting" ? "Stop the inspection first"
+    : "Pack all results into a ZIP file and empty the results folder";
+}
+
+async function loadHistory() {
+  const h = await (await fetch("api/results")).json();
+  $("history").innerHTML = h.map((r, i) => `<tr data-i="${i}">
+      <td>${r.timestamp.slice(11, 19)}</td><td><span class="tag ${r.status}">${r.status}</span></td>
+      <td>${esc(r.defects.map((d) => d.label).join(", "))}</td>
+      <td class="${status?.sim ? "" : "hidden"}">${esc(r.ground_truth || "")}</td><td>${r.time_ms.toFixed(0)}</td></tr>`).join("");
+  $("history").onclick = (e) => {
+    const tr = e.target.closest("tr"); if (!tr) return;
+    selectedResult = h[+tr.dataset.i]; showResult(selectedResult);
+    setTimeout(() => { selectedResult = null; }, 15000);
+  };
+}
+
+let pendingParts = 0;
+const fmtSize = (b) => b > 1048576 ? (b / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1024)) + " KB";
+
+async function loadArchives() {
+  const d = await (await fetch("api/archives")).json();
+  const p = d.pending;
+  pendingParts = p.inspected + p.no_part;
+  $("pendingInfo").textContent = p.inspected
+    ? `Current batch (not yet archived): ${p.inspected} parts, ${p.nok} NOK` + (p.nok_rate_percent != null ? ` (${p.nok_rate_percent} %)` : "")
+    : "No unarchived results.";
+  $("archiveList").innerHTML = d.archives.map((a) => {
+    const s = a.summary;
+    const info = s ? `${s.inspected} parts · ${s.nok} NOK${s.nok_rate_percent != null ? ` (${s.nok_rate_percent} %)` : ""} · ` : "";
+    return `<div class="a">
+      <div><div class="n">${esc(a.file)}</div><div class="s">${info}${fmtSize(a.size_bytes)} · ${a.created.replace("T", " ")}</div></div>
+      <div class="row"><a class="btn" href="api/archives/${encodeURIComponent(a.file)}" download>Download</a>
+        <button class="danger" data-f="${esc(a.file)}">Delete</button></div>
+    </div>`;
+  }).join("");
+}
+
+$("archiveList").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-f]"); if (!b) return;
+  if (confirm(`Permanently delete the archive ${b.dataset.f}?`)) {
+    await api(`api/archives/${encodeURIComponent(b.dataset.f)}`, "DELETE"); loadArchives();
+  }
+});
+
+$("btnArchive").onclick = async () => {
+  const label = $("archiveLabel").value.trim() || status?.model?.name || "batch";
+  if (!confirm(`Archive ${pendingParts} result(s) as “${label}” and clear the results folder?`)) return;
+  const r = await api("api/archives", "POST", { label });
+  $("archiveLabel").value = ""; lastImageId = null; $("history").innerHTML = "";
+  $("resBadge").className = "badge none"; $("resBadge").textContent = "–";
+  $("resTitle").textContent = "No inspection yet"; $("resMeta").textContent = "";
+  $("resImgs").classList.add("hidden"); $("resDefects").innerHTML = ""; $("resScores").innerHTML = "";
+  toast(`Archived: ${r.file}`, "ok");
+  loadArchives();
+};
+
+async function loadModels() {
+  const models = await (await fetch("api/models")).json();
+  const active = status?.model?.slug;
+  $("modelSelect").innerHTML = models.length
+    ? models.map((m) => `<option value="${m.slug}" ${m.slug === active ? "selected" : ""}>${esc(m.name)}</option>`).join("")
+    : "<option value=''>– teach in a model first –</option>";
+  $("models").innerHTML = models.length ? models.map((m) => `
+    <div class="m ${m.slug === active ? "active" : ""}">
+      <div class="n">${esc(m.name)}</div>
+      <div class="s">${m.n_samples} references · ${m.methods.map((x) => esc(opts.methods[x] || x)).join(", ")}
+        · comparison: ${esc(m.diff_representation)} · ML: ${esc(m.pca_representation)} · ${m.created.replace("T", " ")}</div>
+      <div class="row" style="margin-top:6px">
+        <button data-a="report" data-s="${m.slug}">Training report</button>
+        <button data-a="retrain" data-s="${m.slug}" title="Retrain with the settings from 'Inspection methods & image representation'">Retrain</button>
+        <button data-a="delete" data-s="${m.slug}" class="danger">Delete</button>
+      </div>
+    </div>`).join("") : `<p class="hint">No models yet.</p>`;
+}
+
+$("models").addEventListener("click", async (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  const slug = b.dataset.s;
+  if (b.dataset.a === "report") {
+    const r = await (await fetch(`api/models/${slug}`)).json();
+    $("report").textContent = JSON.stringify(r.report, null, 2); $("report").classList.remove("hidden");
+  } else if (b.dataset.a === "retrain") {
+    await api(`api/models/${slug}/retrain`, "POST", currentMethodSettings());
+  } else if (b.dataset.a === "delete" && confirm("Really delete this model?")) {
+    await api(`api/models/${slug}`, "DELETE"); lastModelsKey = "";
+  }
+});
+
+$("thumbs").addEventListener("click", (e) => {
+  if (e.target.dataset.i !== undefined) api("api/learn/undo", "POST", { index: +e.target.dataset.i }).then(() => $("thumbs").innerHTML = "");
+});
+$("btnLearnStart").onclick = () => api("api/learn/start", "POST", { name: $("learnName").value });
+$("btnLearnFinish").onclick = () => api("api/learn/finish", "POST", currentMethodSettings());
+$("btnLearnCancel").onclick = () => confirm("Cancel learning? Captured images will be lost.") && api("api/learn/cancel", "POST");
+$("btnInspStart").onclick = () => api("api/inspect/start", "POST", { model: $("modelSelect").value });
+$("btnInspStop").onclick = () => api("api/inspect/stop", "POST");
+$("btnCapture").onclick = () => api("api/capture", "POST");
+$("btnReset").onclick = () => api("api/counters/reset", "POST").then(() => { lastImageId = null; $("history").innerHTML = ""; });
+$("simLight").onchange = (e) => api("api/sim", "POST", { lighting: e.target.value });
+$("simPart").onchange = (e) => api("api/sim", "POST", { part_type: e.target.value });
+$("simAngle").onchange = (e) => api("api/sim", "POST", { any_angle: e.target.value === "1" });
+$("simRate").oninput = (e) => $("simRateVal").textContent = Math.round(e.target.value * 100) + " %";
+$("simRate").onchange = (e) => api("api/sim", "POST", { defect_rate: +e.target.value });
+
+async function poll() {
+  try { render(await (await fetch("api/status")).json()); } catch (e) { $("mode").textContent = "offline"; }
+  setTimeout(poll, 700);
+}
+
+(async () => {
+  opts = await (await fetch("api/options")).json();
+  methodSettings();
+  poll();
+})();
+</script>
+</body>
+</html>

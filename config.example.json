@@ -1,0 +1,65 @@
+{
+  "camera": {
+    "source": "pi",
+    "width": 1280,
+    "height": 960,
+    "fps": 20,
+    "exposure_us": 4000,
+    "analogue_gain": 1.0,
+    "lock_white_balance": true,
+    "colour_gains": [
+      1.6,
+      1.6
+    ],
+    "sim_lighting": "front",
+    "sim_part_type": "A",
+    "sim_defect_rate": 0.3,
+    "sim_speed_px": 14.0
+  },
+  "localization": {
+    "polarity": "auto",
+    "min_part_area_ratio": 0.02,
+    "border_margin_px": 4,
+    "canvas_margin_ratio": 0.12,
+    "use_ecc_refine": true,
+    "work_width": 640
+  },
+  "trigger": {
+    "center_band_ratio": 0.12,
+    "axis": "x",
+    "detect_width": 320,
+    "rearm_frames": 3
+  },
+  "method": {
+    "methods": [
+      "geometry",
+      "diff",
+      "pca"
+    ],
+    "diff_representation": "norm",
+    "pca_representation": "edges",
+    "hole_min_area_px": 40,
+    "pos_tol_px": 6.0,
+    "dia_tol_ratio": 0.1,
+    "tol_sigma": 4.0,
+    "rim_edge_threshold": 0.25,
+    "shape_tol_ratio": 0.25,
+    "outline_min_area_px": 80,
+    "diff_z_threshold": 6.0,
+    "diff_sigma_floor": 0.04,
+    "diff_blur": 5,
+    "diff_min_area_px": 30,
+    "pca_size": 96,
+    "pca_variance": 0.95,
+    "pca_margin": 1.5,
+    "pca_residual_threshold": 0.25
+  },
+  "storage": {
+    "models_dir": "data/models",
+    "results_dir": "data/results",
+    "save_ok_images": false,
+    "save_nok_images": true,
+    "history_size": 50
+  },
+  "target_reference_count": 15
+}
