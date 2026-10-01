@@ -29,6 +29,10 @@ class CameraConfig:
     # A number = fixed lens position in dioptres (1 / distance in m, e.g. 4.0 = 25 cm).
     # Continuous autofocus is never used – it would refocus between parts.
     lens_position: float | None = None
+    # Sensor mode (Pi camera): the raw readout of the sensor, scaled by the ISP to width × height.
+    # Camera Module v2 (IMX219): [1640, 1232] = 2×2 binned, FULL field of view, less noise.
+    # None = libcamera chooses (beware: 1920×1080 on the IMX219 is a CROP of the image centre).
+    sensor_mode: list[int] | None = None
     # Simulator
     sim_lighting: str = "front"        # "front" (front light) or "back" (backlight)
     sim_part_type: str = "A"           # "A" 2 holes, "B" hole + slot, "C" triangle, "D" square
@@ -190,6 +194,8 @@ class UIConfig:
     # The supervisor screen needs no PIN. "" = setup area without PIN. CHANGE THE DEFAULT.
     setup_pin: str = "1234"
     setup_timeout_min: int = 30        # setup area locks itself after this idle time
+    preview_fps: float = 12.0          # live image in the browser (lower = less CPU, e.g. 5 on a Pi 3)
+    preview_quality: int = 75          # JPEG quality of the live image
 
 
 @dataclass

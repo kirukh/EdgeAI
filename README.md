@@ -276,13 +276,45 @@ disturb the reference comparisons.
 **Focus (Camera Module 3 / autofocus cameras):** With `"lens_position": null` (default) the camera runs
 one autofocus cycle at start-up and then locks the focus. For reproducible results set a fixed value in
 dioptres, e.g. `"lens_position": 3.3` (≈ 30 cm working distance; value = 100 / distance in cm). The focus
-used is written to the log at start-up. Cameras without autofocus (HQ, Global Shutter) ignore the setting;
-focus them manually on the lens.
+used is written to the log at start-up. Cameras without autofocus (Camera Module v2, HQ, Global Shutter)
+ignore the setting; focus them by hand with the **focus assistant** (setup area → Setup → *Camera & focus*).
 
-**Run time:** On an x86 laptop an inspection takes about 60–90 ms (including the 360° rotation search),
-and training takes about 2–3 s
-(15 images, 1280×960). This has not been measured on the Pi; expect several times that. The main tuning knob
-is `localization.work_width` (default 640 px).
+**Run time:** On an x86 laptop an inspection takes about 35 ms (including the 360° rotation search), and
+training takes about 1.5 s (15 images, 1280×960). On the Pi run `main.py benchmark`; a Pi 3 is roughly 8–15×
+slower. The main tuning knobs are `localization.rotation_search` and `localization.work_width` (default 640 px).
+
+### Raspberry Pi 3 Model B + Camera Module v2 (IMX219)
+
+Start with the ready-made preset: `.venv/bin/python main.py --config config.pi3_imx219.json web --camera pi`
+(copy it to `config.json` and adjust it there later).
+
+| Setting | Value | Why |
+|---|---|---|
+| `camera.sensor_mode` | `[1640, 1232]` | 2×2-binned readout of the **full** sensor: full field of view, less noise. Without it libcamera may pick 1920×1080, which on the IMX219 is a **crop** of the image centre. The log shows the readout mode at start-up and warns about a crop. |
+| `camera.width/height` | 1280 × 960 | Scaled by the camera's ISP (free); the models work at 640 px anyway. |
+| `camera.fps` | 15 | Fewer frames to copy and check on the 1 GB / 1.2 GHz Pi 3. |
+| `camera.exposure_us` | 2000 | Short against motion blur: blur = belt speed × exposure (50 mm/s × 2 ms = 0.1 mm). Needs bright, constant light. |
+| `trigger.detect_width` | 240 | Part detection for the trigger on a smaller image. |
+| `self_learning.max_references` | 40 | Less RAM and shorter background training on the Pi 3. |
+| `ui.preview_fps` | 5 | The live image costs CPU on the Pi and in the browser. |
+
+Independent of the preset, the software now:
+- corrects lens distortion only for the frames that are inspected, not for every camera frame;
+- always takes a **fresh** frame (no frame that waited in a buffer while the Pi was busy) and times the reject
+  pulse from the sensor timestamp, so a slow inspection does not shift the ejector timing.
+
+Hardware notes for this combination:
+- **Focus:** the Camera Module v2 lens is set to far distance at the factory. At 20–40 cm the image is blurry
+  until you turn the lens (counter-clockwise = closer) with the small plastic tool. Use the focus assistant.
+- **Rolling shutter:** the IMX219 reads the image line by line in about 24 ms (1640×1232 mode). A moving part is
+  sheared by up to belt speed × 24 ms × (part height / image height). Taught-in and inspected parts at the same
+  constant speed are sheared alike, but for the best measuring accuracy stop the part under the camera or run
+  the belt slowly.
+- **Run the browser on another device** (laptop, tablet, phone): Firefox on the Pi 3 itself takes a large share
+  of the CPU and the 1 GB RAM. If a monitor at the Pi is needed, keep `preview_fps` low.
+- **Power supply 5.1 V / 2.5 A** and a heat sink: under-voltage (lightning icon) or overheating throttles the CPU.
+- **Guided parts:** if the parts always arrive in the same orientation (or turned by 180°), set
+  `"localization": {"rotation_search": "flip"}` – the full 360° search is the most expensive step.
 
 **Security:** The web UI has no login by default. Only run it on an isolated network, or set `QC_TOKEN`.
 All modifying actions then require the token; open the page with `?token=…`. Model names are checked

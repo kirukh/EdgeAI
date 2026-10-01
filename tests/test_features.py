@@ -429,3 +429,33 @@ def test_setup_pin_protects_expert_functions(tmp_path):
     assert c.post("/api/setup/unlock", json={"pin": "4711"}).status_code == 429
     s.cfg.ui.setup_pin = ""                                                   # no PIN configured → open
     assert c.post("/api/counters/reset").json["ok"]
+
+
+def test_focus_assistant_measures_sharpness(tmp_path):
+    """Sharp image → higher value than a blurred one; the overlay runs inside the preview."""
+    from qc.system import QCSystem
+
+    rng = np.random.default_rng(31)
+    sharp = cv2.cvtColor(shots("A", "front", 1, rng)[0], cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(sharp, (0, 0), 2.5)
+    assert QCSystem.sharpness(sharp) > 2 * QCSystem.sharpness(blurred)
+    s = _system(tmp_path)
+    s.set_focus_assist(True)
+    frame = s._read()
+    s.trigger.update(frame)
+    s._update_preview(frame)
+    st = s.status()
+    assert st["focus_assist"]["value"] > 0 and st["focus_assist"]["best"] >= st["focus_assist"]["value"]
+    s.set_focus_assist(False)
+    assert s.status()["focus_assist"] is None
+
+
+def test_undistortion_only_for_inspected_frames(tmp_path):
+    """The loop works on raw frames; only learned/inspected captures are undistorted."""
+    s = _system(tmp_path)
+    calls = []
+    s.undistort = lambda f: (calls.append(1), f)[1]
+    frame = s._read()
+    assert not calls                                   # trigger/preview frame: no remap
+    out = s._undistort_shots([{"main": frame}, {"main": frame}])
+    assert len(calls) == 2 and out[0]["main"] is frame

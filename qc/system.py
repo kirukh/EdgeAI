@@ -122,8 +122,9 @@ class QCSystem:
         self.messages: deque[dict] = deque(maxlen=30)
         self.last_result: dict | None = None
         self.preview_jpeg: bytes | None = None
-        self.last_frame: np.ndarray | None = None       # undistorted
-        self.last_raw: np.ndarray | None = None         # as delivered by the camera (for calibration)
+        self.last_frame: np.ndarray | None = None       # as delivered by the camera (trigger, preview, calibration)
+        self.last_raw: np.ndarray | None = None
+        self.focus_assist: dict | None = None            # {"until", "best", "value"} while the assistant is on
         self.fps = 0.0
         self._ids = itertools.count(1)
         self._stop = threading.Event()
@@ -198,11 +199,18 @@ class QCSystem:
         return ["back", "front"] if self.dual else ["main"]
 
     def _read(self) -> np.ndarray | None:
+        """Raw camera frame. Lens distortion is only corrected for the frames that are actually
+        learned/inspected (``_undistort_shots``) – a full-frame remap at camera rate is too
+        expensive on a small Pi, and the trigger only needs the rough part position."""
         raw = self.camera.read()
-        if raw is None:
-            return None
-        self.last_raw = raw
-        return self.undistort(raw) if self.undistort else raw
+        if raw is not None:
+            self.last_raw = raw
+        return raw
+
+    def _undistort_shots(self, shots: list[dict]) -> list[dict]:
+        if not self.undistort:
+            return shots
+        return [{ch: (self.undistort(f) if f is not None else None) for ch, f in c.items()} for c in shots]
 
     # ------------------------------------------------------------------ loop
     def start(self) -> None:
@@ -224,7 +232,7 @@ class QCSystem:
             if frame is None:
                 time.sleep(0.05)
                 continue
-            t_capture = time.time()
+            t_capture = time.time() - self.camera.last_age_s      # when the sensor saw it, not when we got it
             self.last_frame = frame
             active = self.mode in ("learning", "inspecting", "selftest")
             fire = False
@@ -237,14 +245,10 @@ class QCSystem:
                 frame = self.camera.next_part()
                 self._last_folder_step = time.time()
                 fire = frame is not None
-                if frame is not None and self.undistort:
-                    frame = self.undistort(frame)
             if self._manual.is_set():
                 self._manual.clear()
                 if self.is_folder and self.mode == "learning":
                     frame = self.camera.next_part()
-                    if frame is not None and self.undistort:
-                        frame = self.undistort(frame)
                 fire = frame is not None and active
             if fire and self._burst is None:
                 self._on_part(frame, t_capture)
@@ -253,7 +257,7 @@ class QCSystem:
             if time.time() - t_last >= 1.0:
                 self.fps = n / (time.time() - t_last)
                 t_last, n = time.time(), 0
-            if time.time() - last_preview > 0.08:
+            if time.time() - last_preview > 1.0 / max(0.5, self.cfg.ui.preview_fps):
                 self._update_preview(frame)
                 last_preview = time.time()
 
@@ -290,7 +294,13 @@ class QCSystem:
 
     def _update_preview(self, frame: np.ndarray) -> None:
         img = resize_to_width(frame, self.PREVIEW_WIDTH).copy()
-        if self.camera.continuous:
+        fa = self.focus_assist
+        if fa is not None:
+            if time.time() > fa["until"]:
+                self.focus_assist = None
+            else:
+                self._draw_focus(img, frame, fa)
+        elif self.camera.continuous:
             self.trigger.draw(img)
         label = {"idle": "READY", "learning": f"LEARNING {len(self.learn_captures)}/{self.cfg.target_reference_count}",
                  "training": "TRAINING ...", "inspecting": "INSPECTION ACTIVE",
@@ -298,11 +308,57 @@ class QCSystem:
         cv2.rectangle(img, (0, img.shape[0] - 26), (img.shape[1], img.shape[0]), (0, 0, 0), cv2.FILLED)
         cv2.putText(img, f"{label}   {self.fps:4.1f} fps", (8, img.shape[0] - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                     (255, 255, 255), 1, cv2.LINE_AA)
-        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, int(self.cfg.ui.preview_quality)])
         if ok:
             self.preview_jpeg = buf.tobytes()
 
+    # ------------------------------------------------------- focus assistant
+    FOCUS_MINUTES = 10
+
+    def set_focus_assist(self, on: bool) -> None:
+        """Live sharpness value in the camera image – for lenses that are focused by hand
+        (Camera Module v2/IMX219, HQ camera, Global Shutter camera)."""
+        self.focus_assist = {"until": time.time() + self.FOCUS_MINUTES * 60, "best": 0.0, "value": 0.0} if on else None
+        self.log("info", "Focus assistant " + ("on – turn the lens slowly until the value is at its maximum."
+                                               if on else "off."))
+
+    @staticmethod
+    def sharpness(gray: np.ndarray) -> float:
+        """Focus measure: variance of the Laplacian (higher = sharper). Robust against noise
+        through a light blur; only comparable for the same scene and lighting."""
+        g = cv2.GaussianBlur(gray, (3, 3), 0)
+        return float(cv2.Laplacian(g, cv2.CV_32F).var())
+
+    def _draw_focus(self, img: np.ndarray, frame: np.ndarray, fa: dict) -> None:
+        h, w = frame.shape[:2]
+        # measure in full resolution on the central 50 % (or on the part, if one is visible)
+        det = self.trigger.last_det
+        on_part = det is not None and det.complete
+        if on_part:
+            x, y, bw, bh = cv2.boundingRect((det.contour.astype(np.float32) * self.trigger.scale).astype(np.int32))
+            x0, y0, x1, y1 = max(0, x), max(0, y), min(w, x + bw), min(h, y + bh)
+        else:
+            x0, y0, x1, y1 = w // 4, h // 4, 3 * w // 4, 3 * h // 4
+        roi = frame[y0:y1, x0:x1]
+        if roi.size == 0:
+            return
+        v = self.sharpness(to_gray(roi))
+        fa["value"] = 0.7 * fa["value"] + 0.3 * v if fa["value"] else v       # smooth sensor noise
+        fa["best"] = max(fa["best"], fa["value"])
+        s = img.shape[1] / w
+        cv2.rectangle(img, (int(x0 * s), int(y0 * s)), (int(x1 * s), int(y1 * s)), (0, 200, 255), 1)
+        rel = fa["value"] / fa["best"] if fa["best"] else 0.0
+        col = (60, 200, 60) if rel > 0.95 else (0, 200, 255) if rel > 0.8 else (60, 60, 230)
+        cv2.rectangle(img, (0, 0), (img.shape[1], 44), (0, 0, 0), cv2.FILLED)
+        cv2.rectangle(img, (8, 30), (8 + int((img.shape[1] - 16) * min(1.0, rel)), 40), col, cv2.FILLED)
+        cv2.putText(img, f"FOCUS {fa['value']:.0f}   best {fa['best']:.0f}   ({rel * 100:.0f} %)", (8, 22),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, col, 1, cv2.LINE_AA)
+        if not on_part:
+            cv2.putText(img, "no part in view - lay a part flat under the camera", (8, img.shape[0] - 36),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 1, cv2.LINE_AA)
+
     def _handle_part(self, shots: list[dict[str, np.ndarray]], t_capture: float) -> None:
+        shots = self._undistort_shots(shots)
         with self.lock:
             if self.mode == "learning":
                 self._add_reference(shots[0])
@@ -1040,6 +1096,9 @@ class QCSystem:
             "self_learning_running": self._bg_learning is not None,
             "notices": self.supervisor_notices(drift),
             "setup_pin_required": bool(self.cfg.ui.setup_pin),
+            "focus_assist": {"value": round(self.focus_assist["value"], 1), "best": round(self.focus_assist["best"], 1)}
+            if self.focus_assist else None,
+            "camera_info": getattr(self.camera, "info", ""),
             "counts": self.counts, "feedback": self.feedback_counts, "last_result": self.last_result,
             "messages": list(self.messages)[:12],
             "settings": {"shots_per_part": self.cfg.inspection.shots_per_part, "lighting_mode": self.cfg.lighting.mode,

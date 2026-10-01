@@ -25,6 +25,7 @@ class CameraSource:
 
     name = "base"
     info = ""
+    last_age_s = 0.0          # age of the last frame returned by read() (sensor exposure → now)
     # Sources with real parts moving on a conveyor → the trigger decides when to capture
     continuous = True
 
@@ -42,11 +43,19 @@ class PiCameraSource(CameraSource):
         from picamera2 import Picamera2  # only available on the Pi
 
         self.cam = Picamera2()
-        config = self.cam.create_video_configuration(
-            main={"size": (cfg.width, cfg.height), "format": "RGB888"},
-            controls={"FrameRate": cfg.fps},
-        )
+        kwargs = {}
+        if cfg.sensor_mode:
+            # fixed sensor readout, e.g. IMX219 1640×1232 (binned, full field of view)
+            kwargs["sensor"] = {"output_size": tuple(int(v) for v in cfg.sensor_mode)}
+        try:
+            config = self.cam.create_video_configuration(
+                main={"size": (cfg.width, cfg.height), "format": "RGB888"},
+                controls={"FrameRate": cfg.fps}, queue=False, **kwargs)
+        except TypeError:          # older picamera2 without the "sensor" argument
+            config = self.cam.create_video_configuration(
+                main={"size": (cfg.width, cfg.height), "format": "RGB888"}, controls={"FrameRate": cfg.fps})
         self.cam.configure(config)
+        self.has_autofocus = "AfMode" in self.cam.camera_controls
         controls: dict = {}
         if cfg.exposure_us > 0:
             # Fixed exposure + gain → reproducible brightness.
@@ -58,8 +67,10 @@ class PiCameraSource(CameraSource):
             self.cam.set_controls(controls)
         self.cam.start()
         time.sleep(0.5)
-        self.info = ""
-        if "AfMode" in self.cam.camera_controls:        # camera with autofocus (e.g. Camera Module 3)
+        self.sensor_info = self._describe(cfg)
+        self.info = self.sensor_info + ("" if self.has_autofocus else
+                                        ", fixed-focus lens (focus by turning the lens – use the focus assistant)")
+        if self.has_autofocus:        # camera with autofocus (e.g. Camera Module 3)
             try:
                 if cfg.lens_position is None:
                     self.cam.set_controls({"AfMode": 1})         # auto: one focus run, then the lens stays
@@ -68,13 +79,43 @@ class PiCameraSource(CameraSource):
                     self.cam.set_controls({"AfMode": 0, "LensPosition": float(cfg.lens_position)})   # manual
                     time.sleep(0.3)
                 pos = self.cam.capture_metadata().get("LensPosition")
-                self.info = f"focus fixed at {pos:.2f} dioptres (≈ {100 / pos:.0f} cm)" if pos else ""
+                if pos:
+                    self.info += f", focus fixed at {pos:.2f} dioptres (≈ {100 / pos:.0f} cm)"
             except Exception as e:  # noqa: BLE001 - focus problems must not stop the system
-                self.info = f"focus could not be set: {e}"
+                self.info += f", focus could not be set: {e}"
+
+    def _describe(self, cfg: CameraConfig) -> str:
+        """Sensor model and readout mode for the log (purely informative, never fails)."""
+        try:
+            props = self.cam.camera_properties
+            model = props.get("Model", "?")
+            conf = self.cam.camera_configuration()
+            sensor = (conf.get("sensor") if isinstance(conf, dict) else getattr(conf, "sensor", None)) or {}
+            mode = sensor.get("output_size") if isinstance(sensor, dict) else getattr(sensor, "output_size", None)
+            full = props.get("PixelArraySize")
+            text = f"sensor {model}" + (f", readout {mode[0]}×{mode[1]}" if mode else "")
+            crop = self.cam.capture_metadata().get("ScalerCrop")       # (x, y, w, h) on the pixel array
+            if crop and full and crop[2] < 0.9 * full[0]:
+                text += (f" – field of view CROPPED to {crop[2]}×{crop[3]} of {full[0]}×{full[1]} "
+                         "(set camera.sensor_mode, e.g. [1640, 1232] for the IMX219)")
+            return text + f", output {cfg.width}×{cfg.height}"
+        except Exception as e:  # noqa: BLE001
+            return f"sensor info unavailable ({e})"
 
     def read(self):
-        # picamera2 "RGB888" delivers BGR byte order – matches OpenCV directly
-        return self.cam.capture_array("main")
+        # picamera2 "RGB888" delivers BGR byte order – matches OpenCV directly.
+        # queue=False: always a fresh frame, never one that waited in a buffer while the Pi was busy.
+        # last_age_s = time since the sensor exposed it → exact timing of the reject pulse.
+        req = self.cam.capture_request()
+        try:
+            frame = req.make_array("main")
+            ts = req.get_metadata().get("SensorTimestamp")
+        finally:
+            req.release()
+        self.last_age_s = max(0.0, (time.monotonic_ns() - ts) / 1e9) if ts else 0.0
+        if self.last_age_s > 1.0:            # clock domains differ – do not trust it
+            self.last_age_s = 0.0
+        return frame
 
     def close(self):
         self.cam.stop()

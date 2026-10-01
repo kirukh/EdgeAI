@@ -409,6 +409,18 @@
       </section>
 
       <section class="card">
+        <h2>Camera &amp; focus</h2>
+        <div class="kv"><span>Camera</span><span id="camInfo">–</span></div>
+        <div class="row" style="margin-top:10px">
+          <button class="primary" id="btnFocus">Focus assistant on</button>
+          <span id="focusVal" class="hint"></span>
+        </div>
+        <p class="hint">For lenses focused by hand (Camera Module v2, HQ, Global Shutter): put a part under the camera,
+          switch the assistant on and turn the lens slowly. The value in the live image is highest when the image is sharp –
+          turn past the maximum and back until it shows ≈ 100 %. Then fix the lens (drop of glue / lock ring) and teach in again.</p>
+      </section>
+
+      <section class="card">
         <h2>Camera calibration (mm)</h2>
         <div class="kv" id="calInfo"></div>
         <div id="calSession" class="hidden">
@@ -663,6 +675,11 @@ function render(s) {
     + (s.settings.self_learning_auto ? `Trained in automatically every ${s.settings.self_learning_every} parts (safety checks; rejected pools are discarded).`
                                      : "Trained in only with the button in the Models tab.");
   renderCalibration(cal, s);
+  $("camInfo").textContent = s.camera_info || s.camera;
+  const fa = s.focus_assist;
+  $("btnFocus").textContent = fa ? "Focus assistant off" : "Focus assistant on";
+  $("btnFocus").className = fa ? "" : "primary";
+  $("focusVal").textContent = fa ? `sharpness ${fa.value.toFixed(0)} · best ${fa.best.toFixed(0)} · ${fa.best ? Math.round(100 * fa.value / fa.best) : 0} %` : "";
   $("driftRows").innerHTML = s.drift.rows.length ? s.drift.rows.map((r) => `<tr><td>${esc(r.label)}</td><td>${r.reference}</td>
       <td>${r.current}</td><td class="${r.warning ? "warn" : ""}">${esc(r.deviation)}${r.warning ? " ⚠" : ""}</td></tr>`).join("")
     : `<tr><td colspan="4" class="hint">No data yet – inspect some parts.</td></tr>`;
@@ -866,6 +883,7 @@ $("setShots").onchange = (e) => api("api/settings", "POST", { shots_per_part: +e
 $("setSelfLearn").onchange = (e) => api("api/settings", "POST", { self_learning: e.target.checked });
 $("setSelfAuto").onchange = (e) => api("api/settings", "POST", { self_learning_auto: e.target.checked });
 $("btnTestReject").onclick = () => api("api/io/test-reject", "POST");
+$("btnFocus").onclick = () => api("api/focus", "POST", { on: !status.focus_assist });
 $("btnCalStart").onclick = () => api("api/calibration/start", "POST", { cols: +$("calCols").value, rows: +$("calRows").value, square_mm: +$("calSq").value });
 $("btnCalCapture").onclick = async () => {
   try { await api("api/calibration/capture", "POST"); } finally { $("calPreview").src = "api/calibration/preview.jpg?" + Date.now(); $("calPreview").classList.remove("hidden"); }

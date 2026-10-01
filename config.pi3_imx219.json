@@ -1,0 +1,27 @@
+{
+  "camera": {
+    "source": "pi",
+    "sensor_mode": [1640, 1232],
+    "width": 1280,
+    "height": 960,
+    "fps": 15,
+    "exposure_us": 2000,
+    "analogue_gain": 1.0
+  },
+  "localization": {
+    "work_width": 640,
+    "rotation_search": "full"
+  },
+  "trigger": {
+    "detect_width": 240
+  },
+  "self_learning": {
+    "max_references": 40
+  },
+  "ui": {
+    "setup_pin": "1234",
+    "preview_fps": 5,
+    "preview_quality": 70
+  },
+  "target_reference_count": 15
+}
