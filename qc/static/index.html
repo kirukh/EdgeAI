@@ -398,11 +398,7 @@
           <label class="check"><input type="checkbox" id="setSelfLearn"> Collect clearly good parts for self-learning</label>
           <label class="check" style="margin-left:24px"><input type="checkbox" id="setSelfAuto"> Train them in automatically (in the background)</label>
           <p class="hint" id="selfLearnHint" style="margin:0 0 4px 24px"></p>
-          <label>Shots per part (majority vote)
-            <select id="setShots">
-              <option value="1">1 – off</option><option value="3">3 – recommended against random false alarms</option><option value="5">5</option>
-            </select>
-          </label>
+          <p class="hint" id="shotsHint" style="margin:0"></p>
         </div>
         <p class="hint">Dual light needs two switchable LED groups (see Outputs) and its own models. Multiple shots
           apply to single-light mode on a moving belt.</p>
@@ -514,7 +510,7 @@ function toast(text, kind) {
   document.body.appendChild(t); setTimeout(() => t.remove(), 4500);
 }
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const MODE = { idle: "Ready", learning: "Learning", training: "Training", inspecting: "Inspection running", selftest: "Self-test" };
+const MODE = { idle: "Ready", camera_setup: "Adjusting camera", learning: "Learning", training: "Training", inspecting: "Inspection running", selftest: "Self-test" };
 const CH = { front: "Front light", back: "Backlight", main: "" };
 const FB = { false_alarm: ["false alarm", "bad"], missed: ["missed defect", "bad"], confirmed_ok: ["✓ confirmed", "good"],
              confirmed_nok: ["✓ confirmed", "good"] };
@@ -654,7 +650,9 @@ function render(s) {
   // inspection
   $("btnInspStart").disabled = s.mode !== "idle";
   $("btnInspStop").disabled = !["inspecting", "selftest"].includes(s.mode);
-  $("inspHint").textContent = `${s.settings.lighting_mode === "dual" ? "Dual light" : "Single light"} · ${s.settings.shots_per_part} shot(s) per part`
+  $("shotsHint").textContent = `Always ${s.settings.shots_per_part} images per part with majority vote (fixed). `
+    + "The further images are only evaluated when the first one is not clearly good.";
+  $("inspHint").textContent = `${s.settings.lighting_mode === "dual" ? "Dual light" : "Single light"} · ${s.settings.shots_per_part} images per part (majority vote)`
     + (s.io.reject_pin != null ? ` · reject on GPIO ${s.io.reject_pin} (${s.io.backend})` : "");
   // self-test
   const act = s.selftest.active;
@@ -665,7 +663,7 @@ function render(s) {
 
   // setup
   if (document.activeElement?.closest("[data-pane=setup]") == null) {
-    $("setLight").value = s.settings.lighting_mode; $("setShots").value = String(s.settings.shots_per_part);
+    $("setLight").value = s.settings.lighting_mode;
     $("setSelfLearn").checked = s.settings.self_learning;
     $("setSelfAuto").checked = s.settings.self_learning_auto;
   }
@@ -675,7 +673,9 @@ function render(s) {
     + (s.settings.self_learning_auto ? `Trained in automatically every ${s.settings.self_learning_every} parts (safety checks; rejected pools are discarded).`
                                      : "Trained in only with the button in the Models tab.");
   renderCalibration(cal, s);
-  $("camInfo").textContent = s.camera_info || s.camera;
+  const cst = s.camera_state || {};
+  $("camInfo").textContent = (s.camera_info || s.camera) + (cst.exposure_us ? ` · now: exposure ${(cst.exposure_us / 1000).toFixed(2)} ms, gain ${(+cst.gain).toFixed(2)}` : "")
+    + ` · zoom ${cst.zoom}× · belt axis ${cst.axis}` + (cst.auto ? " (automatic camera profile of this part)" : "");
   const fa = s.focus_assist;
   $("btnFocus").textContent = fa ? "Focus assistant off" : "Focus assistant on";
   $("btnFocus").className = fa ? "" : "primary";
@@ -879,7 +879,6 @@ $("btnSelftest").onclick = async () => {
 };
 $("btnSelftestCancel").onclick = () => api("api/inspect/stop", "POST");
 $("setLight").onchange = (e) => api("api/settings", "POST", { lighting_mode: e.target.value }).catch(() => {});
-$("setShots").onchange = (e) => api("api/settings", "POST", { shots_per_part: +e.target.value });
 $("setSelfLearn").onchange = (e) => api("api/settings", "POST", { self_learning: e.target.checked });
 $("setSelfAuto").onchange = (e) => api("api/settings", "POST", { self_learning_auto: e.target.checked });
 $("btnTestReject").onclick = () => api("api/io/test-reject", "POST");
@@ -968,6 +967,8 @@ $("sWrong").onclick = async () => {
   r.feedback = res.outcome; sShow(r); toast("Noted – thank you", "ok");
 };
 
+const STEP_LABEL = { starting: "starting", "white balance": "white balance", exposure: "brightness", focus: "focus",
+                     measuring: "size and position of the part" };
 // defects in plain words for the supervisor (grouped, no scores/thresholds)
 const PLAIN = { MISSING_HOLE: "Hole missing", BLIND_HOLE: "Hole not drilled through", HOLE_POSITION: "Hole in the wrong place",
   HOLE_SHAPE: "Hole has the wrong shape", EXTRA_HOLE: "Extra hole or cut-out", OUTLINE: "Outline / edge damaged",
@@ -1027,7 +1028,8 @@ $("sTeach").onclick = async () => {
 function renderWiz(s) {
   const el = $("sWiz");
   // keep the wizard in sync with the machine state (e.g. after a page reload)
-  if (s.mode === "learning" && (!wiz || wiz.step === "name")) wiz = { step: "feed", name: s.learning.name };
+  if (s.mode === "learning" && (!wiz || wiz.step === "name" || wiz.step === "camera")) wiz = { step: "feed", name: s.learning.name };
+  if (s.mode === "camera_setup" && !wiz) wiz = { step: "camera", name: "new part", started: true };
   if (s.mode === "training" && wiz?.step !== "train") wiz = { step: "train", name: s.learning.name || wiz?.name, seen: true };
   if (wiz?.step === "train" && s.mode === "learning") wiz = { step: "feed", name: wiz.name, failed: true, seen: true };
   if (wiz && ["learning", "training"].includes(s.mode)) wiz.seen = true;
@@ -1038,7 +1040,7 @@ function renderWiz(s) {
   if (!on) { el.dataset.step = ""; return; }
   const L = s.learning;
   if (wiz.step === "name" && !el.dataset.step?.startsWith("name")) {
-    el.innerHTML = `<h2>Teach in a new part – step 1 of 2</h2>
+    el.innerHTML = `<h2>Teach in a new part – step 1 of ${s.camera_controls ? 3 : 2}</h2>
       <p>Enter a name for the part:</p>
       <input type="text" id="wName" placeholder="e.g. triangle plate 3 holes" autocomplete="off">
       <p class="s-note">Then only <b>good</b> parts go over the conveyor – no defective ones.</p>
@@ -1051,13 +1053,53 @@ function renderWiz(s) {
       if (!name) return toast("Please enter a name.");
       if ((window._sModels || []).some((m) => m.name.toLowerCase() === name.toLowerCase()) &&
           !confirm(`A part called “${name}” already exists. Replace it?`)) return;
+      if (status.camera_controls) { wiz = { step: "camera", name }; renderWiz(status); return; }
       await api("api/learn/start", "POST", { name, auto_finish: true });
       wiz = { step: "feed", name }; renderWiz(status);
     };
+  } else if (wiz.step === "camera") {
+    const cs = s.camera_setup;
+    const state = s.mode === "camera_setup" ? "running" : !wiz.started || !cs ? "ready" : cs.error ? "failed" : "done";
+    if (el.dataset.step !== "camera-" + state) {
+      const r = cs?.result;
+      const STEP = { "white balance": "white balance", exposure: "brightness", focus: "focus", measuring: "size and position" };
+      el.innerHTML = `<h2>Teach in “${esc(wiz.name)}” – step 2 of 3: camera</h2>` + ({
+        ready: `<p>Stop the belt and lay <b>one good part</b> flat under the camera, roughly in the middle of the picture.</p>
+          <p class="s-note">The camera then sets brightness, white balance${s.camera_controls ? " and focus (if it has a focus motor)" : ""} by itself.
+          Zoom and belt direction follow with the first part that runs.</p>
+          <div class="bigbtns"><button class="go wide" id="wCam">Adjust camera automatically</button>
+          <button id="wCancel">Cancel</button><button id="wSkip">Skip</button></div>`,
+        running: `<p>Adjusting the camera … please do not move the part.</p><div class="progress"><i style="width:100%"></i></div>
+          <p class="s-note" id="wCamStep"></p>`,
+        failed: `<div class="notices"><div class="error">${esc(cs?.error || "")}</div></div>
+          <div class="bigbtns"><button class="go wide" id="wCam">Try again</button><button id="wCancel">Cancel</button><button id="wSkip">Skip</button></div>`,
+        done: `<div class="big OK" style="font-size:30px">✓ CAMERA ADJUSTED</div>
+          <ul class="why" style="font-size:15px">
+            <li>Brightness: exposure ${r?.exposure_ms} ms${r?.gain > 1.01 ? `, gain ${r.gain.toFixed(1)}` : ""}</li>
+            ${r?.autofocus ? `<li>Focus: ${r.lens_position ? "set automatically" : "<b>not found</b>"}</li>` :
+              `<li>Sharpness: ${r?.edge_width_px == null ? "–" : r.edge_width_px <= 3 ? "good" : "<b>blurry – focus the lens once</b>"}</li>`}
+          </ul>
+          ${(r?.notes || []).map((n) => `<div class="notices"><div class="warn">⚠ ${esc(n)}</div></div>`).join("")}
+          <p>Now start the belt and let <b>${s.learning.target} good parts</b> run. The first part measures the belt direction
+             and zooms in – it is not counted.</p>
+          <div class="bigbtns"><button class="go wide" id="wNext2">Next →</button><button class="wide" id="wCam">Adjust again</button></div>`,
+      }[state]);
+      $("wCam") && ($("wCam").onclick = async () => { wiz.started = true; await api("api/camera-setup/start", "POST"); });
+      $("wSkip") && ($("wSkip").onclick = async () => {
+        await api("api/camera-setup/cancel", "POST");
+        await api("api/learn/start", "POST", { name: wiz.name, auto_finish: true }); wiz = { step: "feed", name: wiz.name }; renderWiz(status); });
+      $("wCancel") && ($("wCancel").onclick = async () => { await api("api/camera-setup/cancel", "POST"); wiz = null; renderWiz(status); });
+      $("wNext2") && ($("wNext2").onclick = async () => {
+        await api("api/learn/start", "POST", { name: wiz.name, auto_finish: true }); wiz = { step: "feed", name: wiz.name }; renderWiz(status); });
+      el.dataset.step = "camera-" + state;
+    }
+    if (state === "running" && $("wCamStep")) $("wCamStep").textContent = "Now: " + (STEP_LABEL[cs?.step] || cs?.step || "");
+    return;
   } else if (wiz.step === "feed") {
     const pct = Math.min(100, 100 * L.count / L.target);
     if (el.dataset.step !== "feed") {
-      el.innerHTML = `<h2>Teach in “${esc(wiz.name)}” – step 2 of 2</h2>
+      el.innerHTML = `<h2>Teach in “${esc(wiz.name)}” – ${s.camera_controls ? "step 3 of 3" : "step 2 of 2"}</h2>
+        <div id="wPath" class="notices"></div>
         <div id="wFailed" class="notices"></div>
         <p>Now run <b>${L.target} good parts</b> over the conveyor, each one placed a bit differently.
            Every part is captured automatically in the middle of the picture.</p>
@@ -1072,6 +1114,8 @@ function renderWiz(s) {
     }
     const err = (s.messages.find((m) => m.level === "error") || {}).text || "";
     $("wFailed").innerHTML = wiz.failed ? `<div class="error">Creating the model failed: ${esc(err)}<br>Run more good parts and press “Finish now”, or cancel.</div>` : "";
+    $("wPath").innerHTML = L.path_pending ? `<div class="warn">▶ Start the belt. The first part measures the belt direction
+      and zooms in – it is not counted. (Belt stopped? Press “Capture now”.)</div>` : "";
     $("wCount").innerHTML = `${L.count} <span>/ ${L.target}</span>`;
     $("wBar").style.width = pct + "%";
     $("wFinish").disabled = L.count < L.minimum || s.mode !== "learning";
@@ -1092,7 +1136,7 @@ function renderWiz(s) {
 }
 
 function renderSimple(s) {
-  const busy = { learning: "Teaching in", training: "Creating model", selftest: "Reference check" }[s.mode];
+  const busy = { camera_setup: "Adjusting camera", learning: "Teaching in", training: "Creating model", selftest: "Reference check" }[s.mode];
   $("sState").textContent = s.mode === "inspecting" ? "● Inspection running" : busy || "Stopped";
   $("sState").className = "s-state " + (s.mode === "inspecting" ? "run" : busy ? "busy" : "");
   const notes = [...(s.notices || [])];

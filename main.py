@@ -216,10 +216,9 @@ def cmd_benchmark(args):
         if v:
             print(f"  {k:32s} {np.mean(v) * 1000:7.1f} ms  (max {np.max(v) * 1000:.1f})")
     tot = np.mean(t["total"])
-    shots = cfg.inspection.shots_per_part
-    print(f"\n→ about {60 / tot:.0f} parts/minute with 1 shot per part"
-          + (f", {60 / (tot * shots):.0f} with {shots} shots" if shots > 1 else "")
-          + " (plus camera/trigger time).")
+    shots = max(3, cfg.inspection.shots_per_part)
+    print(f"\n→ about {60 / tot:.0f} parts/minute for clearly good parts (1st image is final), "
+          f"{60 / (tot * shots):.0f}/minute if every part needs all {shots} images (plus camera/trigger time).")
     print("Faster: smaller localization.work_width, rotation_search 'flip'/'off' for guided parts, fewer methods.")
 
 

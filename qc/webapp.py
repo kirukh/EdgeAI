@@ -187,6 +187,16 @@ def create_app(system: QCSystem) -> Flask:
         except IndexError:
             abort(404)
 
+    @app.post("/api/camera-setup/start")
+    def camera_setup_start():
+        system.start_camera_setup()
+        return ok()
+
+    @app.post("/api/camera-setup/cancel")
+    def camera_setup_cancel():
+        system.cancel_camera_setup()
+        return ok()
+
     @app.post("/api/capture")
     def capture():
         system.manual_capture()
@@ -275,8 +285,7 @@ def create_app(system: QCSystem) -> Flask:
     @app.post("/api/settings")
     def settings():
         d = request.json or {}
-        system.update_settings(d.get("shots_per_part"), d.get("lighting_mode"), d.get("self_learning"),
-                               d.get("self_learning_auto"))
+        system.update_settings(d.get("lighting_mode"), d.get("self_learning"), d.get("self_learning_auto"))
         return ok()
 
     @app.post("/api/focus")
@@ -305,7 +314,7 @@ def create_app(system: QCSystem) -> Flask:
 
     @app.post("/api/calibration/cancel")
     def calib_cancel():
-        system.calib_session = None
+        system.calib_cancel()
         return ok()
 
     @app.delete("/api/calibration")

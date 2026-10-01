@@ -26,9 +26,10 @@ import cv2
 import numpy as np
 
 from . import archive as qa
+from . import autosetup as AS
 from . import calibration as qcal
 from . import model as qm
-from .alignment import detect_part, resize_to_width, to_gray
+from .alignment import _levels, detect_part, resize_to_width, to_gray
 from .camera import CameraSource, FolderSource, SimulatorSource
 from .config import AppConfig, LocalizationConfig, TriggerConfig
 from .drift import DriftMonitor
@@ -102,7 +103,7 @@ def _jpg(img: np.ndarray, q: int = 85) -> bytes:
 class QCSystem:
     PREVIEW_WIDTH = 640
     FRAMES_KEPT = 30          # results whose images are kept in memory for feedback
-    MODES = ("idle", "learning", "training", "inspecting", "selftest")
+    MODES = ("idle", "camera_setup", "learning", "training", "inspecting", "selftest")
 
     def __init__(self, cfg: AppConfig, camera: CameraSource):
         self.cfg = cfg
@@ -125,10 +126,21 @@ class QCSystem:
         self.last_frame: np.ndarray | None = None       # as delivered by the camera (trigger, preview, calibration)
         self.last_raw: np.ndarray | None = None
         self.focus_assist: dict | None = None            # {"until", "best", "value"} while the assistant is on
+        # automatic camera setup (qc/autosetup.py)
+        self._frame_seq = 0
+        self._frame_cv = threading.Condition()
+        self.cam_setup: dict | None = None               # status of the running/last camera setup
+        self.pending_profile: dict | None = None         # result of the static step, waiting for teach-in
+        self.learn_profile: dict | None = None           # camera profile of the part being taught in
+        self.learn_path: dict | None = None              # first moving part: belt direction + zoom
+        self.learn_edges: list[float] = []               # sharpness (edge width) of the references
+        self._applied: dict | None = None                # camera settings currently applied
+        self._base_axis = cfg.trigger.axis
         self.fps = 0.0
         self._ids = itertools.count(1)
         self._stop = threading.Event()
         self._manual = threading.Event()
+        self._manual_fired = False
         self._thread: threading.Thread | None = None
         self._last_folder_step = 0.0
         self._burst: dict | None = None
@@ -181,7 +193,15 @@ class QCSystem:
 
     @property
     def mm_per_px(self) -> float | None:
-        return self.calibration.mm_per_px(self.cfg.localization.work_width) if self.calibration else None
+        # the calibration was made at the full field of view; with the digital zoom a pixel covers
+        # only the crop's fraction of it
+        if not self.calibration:
+            return None
+        return self.calibration.mm_per_px(self.cfg.localization.work_width) * self.camera.crop[2]
+
+    @property
+    def zoomed(self) -> bool:
+        return self.camera.crop[2] < 0.999
 
     def _sim_light_hook(self, light: str) -> None:
         if self.is_sim and self.dual:
@@ -208,8 +228,8 @@ class QCSystem:
         return raw
 
     def _undistort_shots(self, shots: list[dict]) -> list[dict]:
-        if not self.undistort:
-            return shots
+        if not self.undistort or self.zoomed:      # maps are for the full field of view; a crop of the
+            return shots                           # image centre has little distortion anyway
         return [{ch: (self.undistort(f) if f is not None else None) for ch, f in c.items()} for c in shots]
 
     # ------------------------------------------------------------------ loop
@@ -234,10 +254,15 @@ class QCSystem:
                 continue
             t_capture = time.time() - self.camera.last_age_s      # when the sensor saw it, not when we got it
             self.last_frame = frame
+            with self._frame_cv:
+                self._frame_seq += 1
+                self._frame_cv.notify_all()
             active = self.mode in ("learning", "inspecting", "selftest")
             fire = False
             if self.camera.continuous:
                 fire = self.trigger.update(frame) and active
+                if self.learn_path is not None and self.mode == "learning":
+                    self._track_path(frame, t_capture)
                 if self._burst is not None:
                     self._continue_burst(frame)
             elif self.mode in ("inspecting", "selftest") and time.time() - self._last_folder_step > self.folder_interval:
@@ -245,6 +270,7 @@ class QCSystem:
                 frame = self.camera.next_part()
                 self._last_folder_step = time.time()
                 fire = frame is not None
+            self._manual_fired = self._manual.is_set()
             if self._manual.is_set():
                 self._manual.clear()
                 if self.is_folder and self.mode == "learning":
@@ -267,8 +293,8 @@ class QCSystem:
             captures = self._capture_dual(frame)
             self._handle_part([captures], t_capture)
             return
-        shots = max(1, int(self.cfg.inspection.shots_per_part))
-        if self.mode == "inspecting" and shots > 1 and self.camera.continuous:
+        shots = self.shots_per_part
+        if self.mode in ("inspecting", "selftest") and self.camera.continuous:
             self._burst = {"shots": [{"main": frame}], "n": shots, "t0": t_capture}
             return
         self._handle_part([{"main": frame}], t_capture)
@@ -302,7 +328,7 @@ class QCSystem:
                 self._draw_focus(img, frame, fa)
         elif self.camera.continuous:
             self.trigger.draw(img)
-        label = {"idle": "READY", "learning": f"LEARNING {len(self.learn_captures)}/{self.cfg.target_reference_count}",
+        label = {"idle": "READY", "camera_setup": "ADJUSTING CAMERA", "learning": f"LEARNING {len(self.learn_captures)}/{self.cfg.target_reference_count}",
                  "training": "TRAINING ...", "inspecting": "INSPECTION ACTIVE",
                  "selftest": "SELF-TEST: " + (self.selftest or {}).get("step", "").upper() + " PART"}[self.mode]
         cv2.rectangle(img, (0, img.shape[0] - 26), (img.shape[1], img.shape[0]), (0, 0, 0), cv2.FILLED)
@@ -360,6 +386,12 @@ class QCSystem:
     def _handle_part(self, shots: list[dict[str, np.ndarray]], t_capture: float) -> None:
         shots = self._undistort_shots(shots)
         with self.lock:
+            if self.mode == "learning" and self.learn_path is not None:
+                if not self.camera.continuous or self._manual_fired:
+                    # stopped belt / image folder: no belt direction to measure → zoom from the still part
+                    self._finish_path(None)
+                    self.log("info", "Camera zoomed in on the part – capture the part again.")
+                return                                   # the path part is never a reference
             if self.mode == "learning":
                 self._add_reference(shots[0])
             elif self.mode in ("inspecting", "selftest") and self.model is not None:
@@ -377,7 +409,16 @@ class QCSystem:
             self.mode = "learning"
             self.learn_name = name
             self.learn_auto_finish = bool(auto_finish)
-            self.learn_captures, self.learn_thumbs = [], []
+            self.learn_captures, self.learn_thumbs, self.learn_edges = [], [], []
+            if self.pending_profile is not None:
+                # automatic camera setup done: the first moving part sets belt direction and zoom
+                self.learn_profile, self.pending_profile = self.pending_profile, None
+                self.learn_path = {"track": [], "seen": False}
+                if not self.camera.continuous:
+                    self._finish_path(None)
+            else:
+                self.learn_profile, self.learn_path = None, None
+                self._apply_camera(None)                # never teach in with another part's zoom
             if self.is_sim:
                 self.camera.force_good = True    # only good parts on the conveyor while learning
             self.log("info", f"Learning mode started for “{name}”"
@@ -397,6 +438,9 @@ class QCSystem:
                 return
         self.learn_captures.append({ch: f.copy() for ch, f in captures.items()})
         thumb_src = captures.get("front", next(iter(captures.values())))
+        ew = AS.edge_width(to_gray(work), det.contour)        # sharpness of this reference (last channel)
+        if ew is not None:
+            self.learn_edges.append(ew)
         self.learn_thumbs.append(_jpg(resize_to_width(thumb_src, 200), 70))
         self.log("info", f"Reference image {len(self.learn_captures)} captured.")
         if self.learn_auto_finish and len(self.learn_captures) >= self.cfg.target_reference_count:
@@ -414,7 +458,9 @@ class QCSystem:
     def cancel_learning(self) -> None:
         with self.lock:
             self.mode = "idle"
-            self.learn_captures, self.learn_thumbs = [], []
+            self.learn_captures, self.learn_thumbs, self.learn_edges = [], [], []
+            self.learn_profile = self.learn_path = None
+            self._apply_camera(self.model.camera_profile if self.model else None)
             if self.is_sim:
                 self.camera.force_good = False
             self.log("info", "Learning mode cancelled.")
@@ -455,6 +501,11 @@ class QCSystem:
             cal = self.calibration
             recipe = Recipe.train(name, captures, self.cfg.localization, mcfgs,
                                   self.mm_per_px, cal.id if cal else None)
+            prof = dict(self.learn_profile or {"auto": False, "crop": list(self.camera.crop)})
+            if self.learn_edges:
+                prof["edge_width_px"] = round(float(np.median(self.learn_edges)), 2)
+                prof["sharp"] = prof["edge_width_px"] <= self.cfg.autosetup.edge_width_max_px
+            recipe.camera_profile = prof
             recipe.save(self.cfg.storage.models_dir)
             with self.lock:
                 self._set_model(recipe)
@@ -467,6 +518,11 @@ class QCSystem:
             self.log("ok", msg)
             for w in recipe.warnings():
                 self.log("warn", w)
+            if prof.get("sharp") is False:
+                self.log("warn", f"The image is not sharp (edges {prof['edge_width_px']} px wide, should be ≤ "
+                                 f"{self.cfg.autosetup.edge_width_max_px}). Focus the lens once (focus assistant), "
+                                 "then teach in again – detection is less precise this way.")
+            self.learn_profile = None
         except Exception as e:  # noqa: BLE001 - show the error to the supervisor
             with self.lock:
                 self.mode = "learning"
@@ -477,6 +533,238 @@ class QCSystem:
         self.model = recipe
         if recipe is not None:
             self.drift.reset({ch: m.baseline for ch, m in recipe.channels.items()})
+            self._apply_camera(recipe.camera_profile)
+
+    # ------------------------------------------------- camera settings / auto setup
+    def _apply_camera(self, profile: dict | None) -> None:
+        """Applies a part type's camera profile (or the base settings from config.json)."""
+        cam, base, p = self.camera, self.cfg.camera, profile or {}
+        want = {
+            "exposure": (p["exposure_us"], p.get("gain", 1.0)) if "exposure_us" in p else
+                        ((base.exposure_us, base.analogue_gain) if base.exposure_us > 0 else None),
+            "gains": tuple(p["colour_gains"]) if p.get("colour_gains") else
+                     (tuple(base.colour_gains) if base.lock_white_balance else None),
+            "lens": p.get("lens_position", base.lens_position),
+            "crop": tuple(p.get("crop") or AS.FULL),
+            "axis": p.get("axis") or self._base_axis,
+        }
+        if want == self._applied:
+            return
+        if cam.can_control:
+            try:
+                if want["exposure"]:
+                    cam.set_exposure(*want["exposure"])
+                if want["gains"]:
+                    cam.set_colour_gains(want["gains"])
+                if want["lens"] is not None:
+                    cam.set_lens(want["lens"])
+                cam.set_crop(want["crop"])
+            except Exception as e:  # noqa: BLE001 - a camera problem must not stop the system
+                self.log("error", f"Camera settings could not be applied: {e}")
+        self.cfg.trigger.axis = want["axis"]
+        self.trigger.armed, self.trigger.prev_pos = True, None
+        self._applied = want
+
+    def _wait_frames(self, n: int, timeout: float = 5.0) -> None:
+        with self._frame_cv:
+            target = self._frame_seq + n
+            self._frame_cv.wait_for(lambda: self._frame_seq >= target, timeout)
+
+    def _measure_part(self):
+        """Latest frame → (frame, work image, detection or None)."""
+        frame = self.last_raw
+        if frame is None:
+            raise ValueError("No camera image.")
+        work = resize_to_width(frame, self.cfg.localization.work_width)
+        det = detect_part(to_gray(work), self.cfg.localization)
+        return frame, work, (det if det is not None and det.complete else None)
+
+    def start_camera_setup(self) -> None:
+        """Step 1 of the automatic camera setup: ONE good part lies still under the camera."""
+        with self.lock:
+            if self.mode != "idle":
+                raise ValueError("Stop the current mode first.")
+            if not self.camera.can_control:
+                raise ValueError("This camera source cannot be adjusted automatically (Pi camera or simulator only).")
+            self.mode = "camera_setup"
+            self.pending_profile = None
+            self._applied = None                 # camera state changes now – re-apply everything afterwards
+            self.cam_setup = {"running": True, "step": "starting", "error": None, "result": None,
+                              "started": datetime.now().isoformat(timespec="seconds")}
+        threading.Thread(target=self._camera_setup_run, name="qc-camera-setup", daemon=True).start()
+
+    def cancel_camera_setup(self) -> None:
+        with self.lock:
+            self.pending_profile = None
+            self.cam_setup = None
+            if self.mode == "camera_setup":
+                self.mode = "idle"
+            self._applied = None
+            self._apply_camera(self.model.camera_profile if self.model else None)
+
+    def _camera_setup_run(self) -> None:
+        cam, ac, st = self.camera, self.cfg.autosetup, self.cam_setup
+        if self.is_sim:
+            cam.hold_part(True)
+        try:
+            st["step"] = "white balance"
+            cam.set_crop(AS.FULL)
+            e, g = float(self.cfg.camera.exposure_us or 4000), 1.0
+            cam.set_exposure(e, g)
+            cam.awb_start()
+            self._wait_frames(15)
+            gains = cam.awb_result()
+            if gains:
+                cam.set_colour_gains(gains)
+
+            st["step"] = "exposure"
+            det = None
+            for _ in range(12):
+                self._wait_frames(4)
+                levels = []
+                for light in (self._lights() or [None]):
+                    if light:
+                        self.io.set_light(light)
+                        self._wait_frames(max(2, self.cfg.lighting.settle_frames + 1))
+                    frame, work, det = self._measure_part()
+                    levels.append(AS.bright_level(frame, det.contour if det else None, frame.shape[1] / work.shape[1]))
+                if self.dual:
+                    self.io.set_light(self.cfg.lighting.idle_light)
+                e, g, done = AS.next_exposure(e, g, max(levels), ac)
+                cam.set_exposure(e, g)
+                if done and det is not None:
+                    break
+            if det is None:
+                raise ValueError("No complete part found. Lay ONE good part flat under the camera, in the middle "
+                                 "of the image, and try again.")
+
+            lens = None
+            if cam.has_autofocus:
+                st["step"] = "focus"
+                x, y, w, h = cv2.boundingRect(det.contour.astype(np.int32))
+                W, H = work.shape[1], work.shape[0]
+                cam.af_start((x / W, y / H, w / W, h / H))
+                for _ in range(120):
+                    self._wait_frames(1)
+                    state, pos = cam.af_state()
+                    if state != "scanning":
+                        break
+                if state == "focused" and pos:
+                    lens = round(pos, 3)
+                    cam.set_lens(lens)
+                else:
+                    self.log("warn", "Autofocus did not find a sharp image – check that the part is in the middle.")
+
+            st["step"] = "measuring"
+            self._wait_frames(4)
+            frame, work, det = self._measure_part()
+            if det is None:
+                raise ValueError("The part is no longer visible – keep it still under the camera.")
+            gray = to_gray(work)
+            part_level, bg_level = _levels(gray, det)
+            edge = AS.edge_width(gray, det.contour)
+            W, H = work.shape[1], work.shape[0]
+            cx, cy, D = AS.part_extent(det.contour)
+            center = AS.to_sensor(cx, cy, (W, H), AS.FULL)
+            diameter = (D / W, D / H)
+            prof = {"auto": True, "created": datetime.now().isoformat(timespec="seconds"),
+                    "exposure_us": int(e), "gain": float(g), "colour_gains": list(gains) if gains else None,
+                    "lens_position": lens, "crop": list(AS.FULL), "zoom": 1.0, "axis": self._base_axis,
+                    "center": [round(center[0], 4), round(center[1], 4)],
+                    "diameter": [round(diameter[0], 4), round(diameter[1], 4)],
+                    "contrast": round(abs(part_level - bg_level), 1),
+                    "edge_width_full_px": round(edge, 2) if edge else None}
+            notes = []
+            if prof["contrast"] < 40:
+                notes.append(f"Low contrast between part and belt ({prof['contrast']:.0f} grey levels) – "
+                             "a darker/brighter belt or backlight would make detection more reliable.")
+            if g >= ac.max_gain - 1e-3:
+                notes.append("Little light: the image needs the maximum gain (more noise). Brighter lighting helps.")
+            if min(diameter) * 1.35 > 1.0:
+                notes.append("The part almost fills the image – parts may be cut off at the edge. Mount the camera "
+                             "a little higher (no zoom is possible either way).")
+            if not cam.has_autofocus and edge and edge > ac.edge_width_max_px:
+                notes.append(f"The image is blurry (edges {edge:.1f} px). This camera has no focus motor: "
+                             "turn the lens once by hand (focus assistant), then run the setup again.")
+            prof["notes"] = notes
+            with self.lock:
+                self.pending_profile = prof
+                st.update(running=False, step="done", result={
+                    "exposure_ms": round(e / 1000, 2), "gain": g, "white_balance": bool(gains),
+                    "autofocus": cam.has_autofocus, "lens_position": lens, "contrast": prof["contrast"],
+                    "edge_width_px": prof["edge_width_full_px"], "notes": notes})
+            self.log("ok", f"Camera adjusted: exposure {e / 1000:.2f} ms, gain {g:.2f}"
+                     + (f", focus {lens:.2f} dpt" if lens else "") + ". Next: let the parts run – the first one "
+                     "measures the belt direction and sets the zoom.")
+            for n in notes:
+                self.log("warn", n)
+        except Exception as ex:  # noqa: BLE001
+            st.update(running=False, step="failed", error=str(ex))
+            self.log("error", f"Automatic camera setup failed: {ex}")
+            self._applied = None
+            self._apply_camera(self.model.camera_profile if self.model else None)
+        finally:
+            if self.is_sim:
+                cam.hold_part(False)
+            with self.lock:
+                if self.mode == "camera_setup":
+                    self.mode = "idle"
+
+    def _lights(self) -> list[str]:
+        return ["back", "front"] if self.dual else []
+
+    def _track_path(self, frame: np.ndarray, t: float) -> None:
+        """Follows the first part that runs through the image (full field of view)."""
+        lp = self.learn_path
+        det = self.trigger.last_det
+        H, W = frame.shape[:2]
+        if det is not None and det.complete:
+            s = self.trigger.scale
+            lp["track"].append((t,) + AS.to_sensor(det.centroid[0] * s, det.centroid[1] * s, (W, H), self.camera.crop))
+            lp["seen"] = True
+        elif lp["seen"] and det is None:                 # the part has left the image
+            path = AS.path_from_track(lp["track"])
+            if path is None:                             # it did not move (taken away by hand) → wait for the next
+                lp["track"], lp["seen"] = [], False
+                return
+            with self.lock:
+                if self.learn_path is not None:
+                    self._finish_path(path, (W, H))
+
+    def _finish_path(self, path: dict | None, out_size: tuple[int, int] | None = None) -> None:
+        """Belt direction known → digital zoom along the path and exposure limit for the belt speed."""
+        ac, prof = self.cfg.autosetup, self.learn_profile
+        self.learn_path = None
+        if prof is None:
+            return
+        axis = path["axis"] if path else (prof.get("axis") or self._base_axis)
+        cx, cy = prof["center"]
+        if path:
+            if axis == "x":
+                cy = path["across"]
+            else:
+                cx = path["across"]
+        crop, zoom = AS.crop_for_path((cx, cy), tuple(prof["diameter"]), axis, ac)
+        prof.update(crop=list(crop), zoom=zoom, axis=axis)
+        if path:
+            W, H = out_size or (self.last_raw.shape[1], self.last_raw.shape[0])
+            v_out = path["speed"] * (W if axis == "x" else H) / crop[2]       # output px per second
+            e_max = ac.max_blur_px / max(v_out, 1e-6) * 1e6
+            product = prof["exposure_us"] * prof["gain"]
+            e, g = AS.split_exposure(product, min(ac.max_exposure_us, e_max), ac)
+            prof.update(exposure_us=e, gain=g, belt_speed_px_s=round(v_out, 1),
+                        motion_blur_px=round(v_out * e / 1e6, 2))
+            if product / e > ac.max_gain + 1e-6:
+                msg = (f"Not enough light for this belt speed: motion blur {prof['motion_blur_px']:.1f} px "
+                       f"(goal ≤ {ac.max_blur_px}). Brighter light or a slower belt improves accuracy.")
+                prof.setdefault("notes", []).append(msg)
+                self.log("warn", msg)
+        self._applied = None
+        self._apply_camera(prof)
+        self.trigger.armed, self.trigger.prev_pos = False, None     # ignore the part still in the image
+        self.log("ok", f"Belt direction {axis}, digital zoom {zoom:.2f}×"
+                       + (f", exposure {prof['exposure_us'] / 1000:.2f} ms (motion blur {prof['motion_blur_px']} px)"
+                          if path else "") + " – now capturing the good parts.")
 
     def model_warnings(self) -> list[str]:
         r = self.model
@@ -528,8 +816,19 @@ class QCSystem:
         self._manual.set()
 
     # --------------------------------------------------------- inspection
+    @property
+    def shots_per_part(self) -> int:
+        """Multi-shot is always on: at least 3 images per part (majority vote)."""
+        return max(3, int(self.cfg.inspection.shots_per_part))
+
     def _inspect(self, shots: list[dict[str, np.ndarray]], t_capture: float) -> None:
-        results = [self.model.inspect(c) for c in shots]
+        # Adaptive majority vote: a CLEARLY good first image (every method far inside its
+        # tolerance) is final – the other images would only confirm it. Anything else (NOK,
+        # borderline, no part) is decided by the majority of all images. Keeps the Pi fast.
+        first = self.model.inspect(shots[0])
+        clear = first.status == "OK" and all(r.score < self.cfg.inspection.confirm_margin
+                                             for r in first.method_results)
+        results = [first] if clear or len(shots) == 1 else [first] + [self.model.inspect(c) for c in shots[1:]]
         res = self._vote(results)
         idx = min(range(len(results)), key=lambda i: 0 if results[i] is res else 1)
         captures = shots[idx]
@@ -800,6 +1099,7 @@ class QCSystem:
 
     # ----------------------------------------------------------- calibration
     def calib_start(self, cols: int | None = None, rows: int | None = None, square_mm: float | None = None) -> None:
+        self._apply_camera(None)            # calibrate at the full field of view (zoom is accounted for later)
         c = self.cfg.calibration
         self.calib_session = {"cols": int(cols or c.board_cols), "rows": int(rows or c.board_rows),
                               "square_mm": float(square_mm or c.square_mm), "corners": [], "size": None,
@@ -838,6 +1138,7 @@ class QCSystem:
             self.calibration = cal
             self.undistort = qcal.Undistorter(cal)
         self.calib_session = None
+        self._apply_camera(self.model.camera_profile if self.model else None)
         msg = f"Calibration saved: {self.mm_per_px:.4f} mm/px"
         if cal.camera_matrix:
             msg += f", lens distortion corrected (RMS {cal.rms_px:.2f} px)"
@@ -847,6 +1148,10 @@ class QCSystem:
         if cal.note:
             self.log("warn", cal.note)
         return self.calibration_status()
+
+    def calib_cancel(self) -> None:
+        self.calib_session = None
+        self._apply_camera(self.model.camera_profile if self.model else None)
 
     def calib_delete(self) -> None:
         Path(self.cfg.calibration.file).unlink(missing_ok=True)
@@ -873,7 +1178,7 @@ class QCSystem:
         }
 
     # ------------------------------------------------------------ settings
-    def update_settings(self, shots_per_part: int | None = None, lighting_mode: str | None = None,
+    def update_settings(self, lighting_mode: str | None = None,
                         self_learning: bool | None = None, self_learning_auto: bool | None = None) -> None:
         with self.lock:
             if self_learning_auto is not None:
@@ -882,9 +1187,6 @@ class QCSystem:
             if self_learning is not None:
                 self.cfg.self_learning.enabled = bool(self_learning)
                 self.log("info", f"Collecting good parts for self-learning: {'on' if self_learning else 'off'}")
-            if shots_per_part is not None:
-                self.cfg.inspection.shots_per_part = int(min(5, max(1, int(shots_per_part))))
-                self.log("info", f"Shots per part: {self.cfg.inspection.shots_per_part}")
             if lighting_mode is not None and lighting_mode != self.cfg.lighting.mode:
                 if self.mode != "idle":
                     raise ValueError("Stop learning/inspection before changing the lighting mode.")
@@ -1072,6 +1374,10 @@ class QCSystem:
             keys = {r["key"] for r in drift.get("rows", []) if r.get("warning")}
             out += [{"level": "warn", "text": self.DRIFT_HINTS[k]} for k in ("sharpness", "contrast", "background", "area")
                     if k in keys]
+        prof = (self.model.camera_profile or {}) if self.model else {}
+        if prof.get("sharp") is False:
+            out.append({"level": "warn", "text": "The camera image is not sharp – the lens has to be focused once "
+                                                 "(setup technician). Detection is less precise until then."})
         st = self.last_selftest
         if st and not st.get("passed") and self.model is not None and st.get("model") == self.model.name:
             out.append({"level": "error", "text": "The last reference part check FAILED. Do not start production – "
@@ -1092,7 +1398,13 @@ class QCSystem:
             "model_warnings": self.model_warnings(),
             "learning": {"name": self.learn_name, "count": len(self.learn_captures),
                          "target": self.cfg.target_reference_count, "minimum": qm.MIN_REFERENCES,
-                         "auto_finish": self.learn_auto_finish},
+                         "auto_finish": self.learn_auto_finish, "path_pending": self.learn_path is not None},
+            "camera_setup": self.cam_setup,
+            "camera_controls": bool(self.camera.can_control and self.cfg.autosetup.enabled),
+            "camera_state": {"exposure_us": (self._applied or {}).get("exposure", (None,))[0] if (self._applied or {}).get("exposure") else None,
+                             "gain": (self._applied or {}).get("exposure", (None, None))[1] if (self._applied or {}).get("exposure") else None,
+                             "zoom": round(1.0 / self.camera.crop[2], 2), "axis": self.cfg.trigger.axis,
+                             "auto": bool(m and (m.camera_profile or {}).get("auto"))},
             "self_learning_running": self._bg_learning is not None,
             "notices": self.supervisor_notices(drift),
             "setup_pin_required": bool(self.cfg.ui.setup_pin),
@@ -1101,7 +1413,7 @@ class QCSystem:
             "camera_info": getattr(self.camera, "info", ""),
             "counts": self.counts, "feedback": self.feedback_counts, "last_result": self.last_result,
             "messages": list(self.messages)[:12],
-            "settings": {"shots_per_part": self.cfg.inspection.shots_per_part, "lighting_mode": self.cfg.lighting.mode,
+            "settings": {"shots_per_part": self.shots_per_part, "lighting_mode": self.cfg.lighting.mode,
                          "idle_light": self.cfg.lighting.idle_light,
                          "rotation_search": self.cfg.localization.rotation_search,
                          "self_learning": self.cfg.self_learning.enabled,

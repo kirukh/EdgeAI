@@ -12,11 +12,15 @@
       1.6
     ],
     "lens_position": null,
+    "sensor_mode": null,
     "sim_lighting": "front",
     "sim_part_type": "A",
     "sim_any_angle": false,
     "sim_defect_rate": 0.3,
-    "sim_speed_px": 14.0
+    "sim_speed_px": 14.0,
+    "sim_defocus": 0.0,
+    "sim_part_scale": 1.0,
+    "sim_autofocus": false
   },
   "localization": {
     "polarity": "auto",
@@ -83,7 +87,8 @@
     "front_methods": null
   },
   "inspection": {
-    "shots_per_part": 1,
+    "shots_per_part": 3,
+    "confirm_margin": 0.5,
     "tie_is_nok": true
   },
   "self_learning": {
@@ -122,7 +127,21 @@
   },
   "ui": {
     "setup_pin": "1234",
-    "setup_timeout_min": 30
+    "setup_timeout_min": 30,
+    "preview_fps": 12.0,
+    "preview_quality": 75
+  },
+  "autosetup": {
+    "enabled": true,
+    "target_level": 225.0,
+    "min_exposure_us": 100,
+    "max_exposure_us": 8000,
+    "max_gain": 4.0,
+    "max_blur_px": 0.5,
+    "max_zoom": 2.5,
+    "margin_along": 2.0,
+    "margin_across": 1.6,
+    "edge_width_max_px": 3.0
   },
   "target_reference_count": 15
 }

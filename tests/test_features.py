@@ -238,7 +238,10 @@ def test_multishot_voting_and_selftest(tmp_path):
         _wait(lambda: len(s.learn_captures) >= 7)
         s.finish_learning()
         _wait(lambda: s.mode == "idle" and s.model is not None)
-        s.update_settings(shots_per_part=3)
+        assert s.shots_per_part == 3                           # always on, no setting needed
+        s.cfg.inspection.shots_per_part = 1
+        assert s.shots_per_part == 3                           # cannot be switched off
+        s.cfg.inspection.confirm_margin = 0.0                  # evaluate every image in this test
         s.start_inspection()
         _wait(lambda: len(s.history) >= 6)
         s.stop_inspection()
@@ -414,16 +417,16 @@ def test_setup_pin_protects_expert_functions(tmp_path):
     c = create_app(s).test_client()
     # supervisor functions work without PIN
     assert c.post("/api/counters/reset").status_code == 403                   # setup function
-    assert c.post("/api/settings", json={"shots_per_part": 3}).status_code == 403
-    assert s.cfg.inspection.shots_per_part == 1
+    assert c.post("/api/settings", json={"self_learning": False}).status_code == 403
+    assert s.cfg.self_learning.enabled is True
     assert c.post("/api/setup/unlock", json={"pin": "0000"}).status_code == 403
     tok = c.post("/api/setup/unlock", json={"pin": "4711"}).json["token"]
     h = {"X-Setup-Token": tok}
     assert c.get("/api/setup/check", headers=h).json["unlocked"]
-    assert c.post("/api/settings", json={"shots_per_part": 3}, headers=h).json["ok"]
-    assert s.cfg.inspection.shots_per_part == 3
+    assert c.post("/api/settings", json={"self_learning": False}, headers=h).json["ok"]
+    assert s.cfg.self_learning.enabled is False
     c.post("/api/setup/lock", headers=h)
-    assert c.post("/api/settings", json={"shots_per_part": 1}, headers=h).status_code == 403
+    assert c.post("/api/settings", json={"self_learning": True}, headers=h).status_code == 403
     for _ in range(5):                                                        # brute force → lockout
         c.post("/api/setup/unlock", json={"pin": "1"})
     assert c.post("/api/setup/unlock", json={"pin": "4711"}).status_code == 429
@@ -459,3 +462,84 @@ def test_undistortion_only_for_inspected_frames(tmp_path):
     assert not calls                                   # trigger/preview frame: no remap
     out = s._undistort_shots([{"main": frame}, {"main": frame}])
     assert len(calls) == 2 and out[0]["main"] is frame
+
+
+# ------------------------------------------------------------ automatic camera setup
+def test_autosetup_building_blocks():
+    from qc import autosetup as AS
+    from qc.config import AutoSetupConfig
+
+    ac = AutoSetupConfig()
+    e, g, done = AS.next_exposure(4000, 1.0, 255, ac)              # clipped → halve
+    assert e == 2000 and g == 1.0 and not done
+    e, g, done = AS.next_exposure(4000, 1.0, 112.5, ac)            # too dark → exposure ×2
+    assert e == 8000 and not done
+    e, g = AS.split_exposure(16000, 4000, ac)                      # above the limit → gain
+    assert e == 4000 and g == 4.0
+    crop, zoom = AS.crop_for_path((0.5, 0.5), (0.2, 0.267), "x", ac)
+    assert abs(crop[2] - crop[3]) < 1e-9 and 1.0 < zoom <= ac.max_zoom          # square pixels, zoomed in
+    assert crop[0] >= 0 and crop[0] + crop[2] <= 1 and crop[1] + crop[3] <= 1
+    crop, zoom = AS.crop_for_path((0.9, 0.1), (0.05, 0.067), "y", ac)          # clamped to sensor and max zoom
+    assert zoom == ac.max_zoom and crop[0] + crop[2] <= 1.0 + 1e-9 and crop[1] >= 0
+    track = [(i * 0.1, 0.1 + i * 0.05, 0.5 + 0.001 * i) for i in range(10)]
+    path = AS.path_from_track(track)
+    assert path["axis"] == "x" and abs(path["across"] - 0.5) < 0.01 and abs(path["speed"] - 0.5) < 0.05
+    assert AS.path_from_track([(0, 0.5, 0.5), (1, 0.5, 0.5), (2, 0.51, 0.5)]) is None      # did not move
+
+
+def test_edge_width_detects_blur():
+    from qc import autosetup as AS
+
+    rng = np.random.default_rng(41)
+    frame = shots("A", "front", 1, rng)[0]
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    det = detect_part(gray, LocalizationConfig())
+    sharp = AS.edge_width(gray, det.contour)
+    blurry = AS.edge_width(cv2.GaussianBlur(gray, (0, 0), 2.5), det.contour)
+    assert sharp < 3.0 < blurry, (sharp, blurry)
+
+
+def test_automatic_camera_setup_end_to_end(tmp_path):
+    """Badly over-exposed camera + small parts: the setup fixes exposure, measures belt direction
+    and speed, zooms in, the profile is stored with the model and re-applied when it is selected."""
+    s = _system(tmp_path, sim_defect_rate=0.0, exposure_us=9000, sim_part_scale=0.5, fps=60, sim_speed_px=12)
+    s.cfg.target_reference_count = 6
+    s.start()
+    try:
+        s.start_camera_setup()
+        _wait(lambda: s.mode == "idle", 60)
+        assert s.cam_setup["error"] is None, s.cam_setup
+        prof = s.pending_profile
+        assert prof["exposure_us"] < 9000 and prof["crop"] == [0.0, 0.0, 1.0, 1.0]
+        s.start_learning("Small plate", auto_finish=True)
+        _wait(lambda: s.learn_path is None, 60)                 # first part: belt direction + zoom
+        assert s.learn_profile["axis"] == "x" and s.learn_profile["zoom"] > 1.3
+        assert s.learn_profile["motion_blur_px"] <= s.cfg.autosetup.max_blur_px + 1e-6
+        _wait(lambda: s.mode == "idle" and s.model is not None, 180)
+        cp = s.model.camera_profile
+        assert cp["auto"] and cp["zoom"] > 1.3 and cp["sharp"]
+        assert abs(s.camera.crop[2] - 1 / cp["zoom"]) < 0.01
+        # no model → base settings; selecting the part again restores its profile
+        s._apply_camera(None)
+        assert s.camera.crop == (0.0, 0.0, 1.0, 1.0)
+        s.select_model(s.model.slug)
+        assert abs(s.camera.crop[2] - 1 / cp["zoom"]) < 0.01
+        s.start_inspection()
+        _wait(lambda: len(s.history) >= 4, 120)
+        s.stop_inspection()
+        assert all(h["status"] == "OK" for h in s.history), [h["defects"] for h in s.history]
+    finally:
+        s.stop()
+
+
+def test_automatic_focus_on_cameras_with_focus_motor(tmp_path):
+    s = _system(tmp_path, sim_autofocus=True, sim_defocus=2.5, fps=60)
+    s.start()
+    try:
+        s.start_camera_setup()
+        _wait(lambda: s.mode == "idle", 60)
+        r = s.cam_setup["result"]
+        assert r["autofocus"] and r["lens_position"] == 4.0 and s.camera.defocus == 0
+        assert r["edge_width_px"] < 3.0
+    finally:
+        s.stop()

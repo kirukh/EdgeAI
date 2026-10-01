@@ -55,6 +55,9 @@ class Recipe:
         self.legacy = False
         self.collected_seen = 0                  # parts offered to the pool (reservoir sampling)
         self.self_learning_log: list[dict] = []
+        # Camera settings found by the automatic camera setup for this part type
+        # (exposure, gain, white balance, focus, zoom/crop, belt axis) – applied when the model is selected.
+        self.camera_profile: dict | None = None
 
     # ------------------------------------------------------------ properties
     @property
@@ -159,7 +162,7 @@ class Recipe:
     def save_meta(self) -> None:
         meta = {"name": self.name, "created": self.created, "channels": list(self.channels),
                 "sensitivity": self.sensitivity, "format": 3, "collected_seen": self.collected_seen,
-                "self_learning_log": self.self_learning_log}
+                "self_learning_log": self.self_learning_log, "camera_profile": self.camera_profile}
         tmp = self.path / "recipe.json.tmp"
         tmp.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, self.path / "recipe.json")
@@ -173,6 +176,7 @@ class Recipe:
             r = cls(meta["name"], channels, meta.get("sensitivity"), meta.get("created"))
             r.collected_seen = meta.get("collected_seen", 0)
             r.self_learning_log = meta.get("self_learning_log", [])
+            r.camera_profile = meta.get("camera_profile")
         elif (path / "meta.json").exists():
             model = QCModel.load(path)
             r = cls(model.name, {"main": model}, None, model.created)
@@ -330,6 +334,7 @@ class Recipe:
                     report["reasons"].append(f"{label} would loosen by {change * 100:.0f} % (limit "
                                              f"{growth_limit * 100:.0f} %) – the pool probably contains unusual parts.")
         cand = Recipe(self.name, new_channels, self.sensitivity, self.created)
+        cand.camera_profile = self.camera_profile
         # --- check 3: known defective parts
         bad = self._read("known_bad")
         checked = still = 0
@@ -384,6 +389,7 @@ class Recipe:
             new.created = model.created
             new_channels[ch] = new
         r = Recipe(self.name, new_channels, self.sensitivity, self.created)
+        r.camera_profile = self.camera_profile
         r.path, r.legacy = self.path, self.legacy
         r.collected_seen, r.self_learning_log = self.collected_seen, self.self_learning_log
         if self.path:
@@ -437,6 +443,7 @@ class Recipe:
             "last_self_learning": self.self_learning_log[-1] if self.self_learning_log else None,
             "mm_per_px": self.mm_per_px,
             "calibration_id": self.calibration_id,
+            "camera_profile": self.camera_profile,
             "flagged": p.report.get("references_flagged_nok", []),
             "skipped": p.report.get("references_skipped", []),
         }

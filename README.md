@@ -13,7 +13,7 @@ marked in the image.
 | | Who | What |
 |---|---|---|
 | **Operator screen** (default, no PIN) | Supervisor at the conveyor | Select part · Start/Stop · big OK/NOK with the defect in plain words · *Teach in new part* (2-step assistant) · *Finish batch* (ZIP + reset) · *Reference part check* · “Result wrong?” button |
-| **Setup area** (🔒 Setup, PIN) | Setup technician | Methods, sensitivity, calibration, lighting mode, shots per part, GPIO, drift values, model management, archives, simulator |
+| **Setup area** (🔒 Setup, PIN) | Setup technician | Methods, sensitivity, calibration, lighting mode, GPIO, drift values, model management, archives, simulator |
 
 The PIN is set in `config.json → "ui": {"setup_pin": "1234"}` – **change it**. `""` = no PIN. The PIN is checked
 on the server (not only hidden in the page); after 5 wrong entries input is blocked for 60 s, and the setup area
@@ -46,7 +46,7 @@ Workflow on the operator screen:
 
 The setup area (PIN, default `1234`) contains the full technical interface with three tabs: **Operation**
 (statistics, history with scores, self-test, learning with method choice, archive list, messages), **Models**
-(method settings, sensitivity, retraining, self-learning status) and **Setup** (lighting mode, shots per part,
+(method settings, sensitivity, retraining, self-learning status) and **Setup** (lighting mode,
 self-learning, camera calibration, drift monitor, GPIO outputs, simulator).
 
 ![Setup area](docs/screenshot_ui.png)
@@ -67,7 +67,7 @@ Camera image
        diff      z-score difference map vs. mean/spread image of the good parts
        pca       ML: PCA subspace of the good parts, reconstruction error = anomaly
   → Decision: fusion of the methods, × sensitivity per method           (model.py)
-  → optional: several shots per part → majority vote                    (system.py)
+  → always 3 shots per part → majority vote (2nd/3rd only if the 1st is not clearly good)   (system.py)
   → OK / NOK + defect type + marking in the original image             (visualize.py)
   → log, lamps, delayed reject pulse, drift monitor                     (system.py, io_control.py, drift.py)
 ```
@@ -97,7 +97,7 @@ taught in by mistake.
 | **Sensitivity per method** | Models tab | Slider ×0.5 … ×2 per method and model (> 1 = stricter). Takes effect immediately, no retraining. |
 | **Sub-pixel hole measurement** | automatic | Holes are cut at the exact 50 % level on a 4× upsampled patch. Measurement error for known shifts 0.03 px instead of 0.2 px. The fine alignment uses the part outline as datum, so a displaced hole cannot hide its own offset. |
 | **Supervisor feedback** | result card | “Correct” / “Was OK – false alarm” / “Was NOK – missed defect”. Gives the real hit rate (statistics + archive summary). False alarms can be queued as extra references → *Retrain (+N feedback ref.)*. |
-| **Multiple shots per part** | Setup tab | 3 or 5 images while the part passes, majority vote → random false alarms (dust, reflections) disappear. |
+| **Multiple shots per part** | always on | 3 images while the part passes, majority vote → random false alarms (dust, reflections) disappear. Adaptive: if the 1st image is clearly good (every method below 50 % of its threshold) it is final; otherwise all 3 decide – a clearly good part costs one inspection, a doubtful one three. `inspection.shots_per_part` can be raised to 5, not below 3. |
 | **Dual light** | Setup tab + `io` pins | Per part one backlight image (exact silhouette → holes/outline) and one front-light image (surface, blind holes). Separate model per light, results merged (“not drilled through” from front light replaces “missing” from backlight). |
 | **Camera calibration** | Setup tab / `calibrate` | Checkerboard → mm/px, optional lens-distortion correction. Dimensions and tolerances in mm (`pos_tol_mm`, `dia_tol_mm`). Unreliable distortion estimates (board not tilted enough) are rejected automatically. |
 | **Drift monitor** | Setup tab, header | Contrast, background, part size and edge sharpness vs. the learning phase; warning if lighting, camera distance or focus change. |
@@ -143,7 +143,7 @@ slightly defective parts was rejected by all three checks.
 {
   "camera":      {"source": "pi", "exposure_us": 3000},
   "lighting":    {"mode": "dual", "idle_light": "front"},
-  "inspection":  {"shots_per_part": 1},
+  "inspection":  {"shots_per_part": 3},
   "io":          {"enabled": true, "reject_pin": 17, "reject_delay_ms": 600, "reject_pulse_ms": 150,
                   "ok_lamp_pin": 22, "nok_lamp_pin": 27, "front_light_pin": 23, "back_light_pin": 24},
   "method":      {"pos_tol_mm": 0.3, "dia_tol_mm": 0.15},
@@ -279,9 +279,12 @@ dioptres, e.g. `"lens_position": 3.3` (≈ 30 cm working distance; value = 100 /
 used is written to the log at start-up. Cameras without autofocus (Camera Module v2, HQ, Global Shutter)
 ignore the setting; focus them by hand with the **focus assistant** (setup area → Setup → *Camera & focus*).
 
-**Run time:** On an x86 laptop an inspection takes about 35 ms (including the 360° rotation search), and
-training takes about 1.5 s (15 images, 1280×960). On the Pi run `main.py benchmark`; a Pi 3 is roughly 8–15×
-slower. The main tuning knobs are `localization.rotation_search` and `localization.work_width` (default 640 px).
+**Run time:** On an x86 laptop an inspection takes about 20 ms (including the 360° rotation search), and
+training takes about 1 s (15 images). On the Pi run `main.py benchmark`. Measured on a **Raspberry Pi 3 Model B**
+before the speed-up below: 411 ms per part (alignment 285 ms), training 20 s; with the speed-up roughly
+40 % less is expected. The 360° rotation search compares the part with 360 pre-rotated reference images in one
+matrix product, the reference preparation is cached per model, and intermediate alignment steps render only the
+grey image – results are identical (checked: alignment scatter 0.01–0.017 px, all tests unchanged).
 
 ### Raspberry Pi 3 Model B + Camera Module v2 (IMX219)
 
@@ -291,7 +294,7 @@ Start with the ready-made preset: `.venv/bin/python main.py --config config.pi3_
 | Setting | Value | Why |
 |---|---|---|
 | `camera.sensor_mode` | `[1640, 1232]` | 2×2-binned readout of the **full** sensor: full field of view, less noise. Without it libcamera may pick 1920×1080, which on the IMX219 is a **crop** of the image centre. The log shows the readout mode at start-up and warns about a crop. |
-| `camera.width/height` | 1280 × 960 | Scaled by the camera's ISP (free); the models work at 640 px anyway. |
+| `camera.width/height` | 640 × 480 | The camera's ISP scales to the working resolution for free – the Pi 3 no longer has to shrink every 1280×960 frame (that alone took ~40 ms per part). |
 | `camera.fps` | 15 | Fewer frames to copy and check on the 1 GB / 1.2 GHz Pi 3. |
 | `camera.exposure_us` | 2000 | Short against motion blur: blur = belt speed × exposure (50 mm/s × 2 ms = 0.1 mm). Needs bright, constant light. |
 | `trigger.detect_width` | 240 | Part detection for the trigger on a smaller image. |
@@ -313,8 +316,32 @@ Hardware notes for this combination:
 - **Run the browser on another device** (laptop, tablet, phone): Firefox on the Pi 3 itself takes a large share
   of the CPU and the 1 GB RAM. If a monitor at the Pi is needed, keep `preview_fps` low.
 - **Power supply 5.1 V / 2.5 A** and a heat sink: under-voltage (lightning icon) or overheating throttles the CPU.
-- **Guided parts:** if the parts always arrive in the same orientation (or turned by 180°), set
-  `"localization": {"rotation_search": "flip"}` – the full 360° search is the most expensive step.
+- **Guided parts:** if the parts always arrive in the same orientation (or turned by 180°), you can set
+  `"localization": {"rotation_search": "flip"}`; since the speed-up the 360° search costs only a few ms.
+
+## Automatic camera setup
+
+When a new part type is taught in, the camera adjusts itself – no camera knowledge is needed at the conveyor.
+The operator only lays one good part under the camera and lets the parts run:
+
+| Step | What the software does | What stays manual |
+|---|---|---|
+| 1 · One good part lies still under the camera → *Adjust camera automatically* | White balance once and locked. Exposure: the brightest pixels of part + surroundings are set to ≈ 225 of 255 (bright, nothing clipped), gain 1.0 for the least noise. Autofocus on the part and lock (cameras with a focus motor, e.g. Camera Module 3). Sharpness check (edge width) for cameras without one. Size and position of the part. | — |
+| 2 · Start the belt; the **first part** runs through (not counted) | Belt direction (x/y) and the line the parts travel on. Belt speed → exposure shortened so that motion blur stays ≤ 0.5 px (gain raised to keep the brightness). **Digital zoom**: the sensor is read only around the part's path (2.0 × part size along the belt, 1.6 × across, square pixels, max. 2.5×) – the part covers up to 2.5× more pixels, every measurement gets finer. | — |
+| 3 · The other good parts run | Teach-in as usual; sharpness of every reference is measured. | — |
+| Afterwards | All settings are stored **with the model** and applied automatically whenever this part type is selected. | Lens of a camera **without** focus motor (Camera Module v2, HQ): focus once by hand with the focus assistant – the setup reports a blurry image. Camera mount and lighting. |
+
+Notes:
+- **No checkerboard calibration needed** for OK/NOK: tolerances are learned from the good parts, and the trigger
+  always captures the parts at the same place in the image, so lens distortion affects references and inspected
+  parts alike. Calibrate only if you want results in millimetres; the zoom is taken into account automatically
+  (calibrate once at the full field of view).
+- Too little light for the belt speed, low contrast between part and belt, a part that almost fills the image or a
+  blurry lens are reported in plain words during the setup.
+- Settings: `config.json → "autosetup"` (`max_blur_px`, `max_zoom`, `margin_along`, `margin_across`, `max_gain`,
+  `edge_width_max_px`, `enabled`). Without a controllable camera (USB camera, image folder) the step is skipped.
+- Simulator: `"camera": {"sim_part_scale": 0.5, "exposure_us": 9000}` simulates a higher-mounted camera and a badly
+  set exposure; `"sim_defocus": 2.5` a blurry lens, `"sim_autofocus": true` a camera with focus motor.
 
 **Security:** The web UI has no login by default. Only run it on an isolated network, or set `QC_TOKEN`.
 All modifying actions then require the token; open the page with `?token=…`. Model names are checked
@@ -329,7 +356,7 @@ python main.py generate --out data/synth --lighting back --part-type B
 python main.py board --out board.pdf --cols 9 --rows 6 --square 10      # printable checkerboard (A4, 100 %)
 python main.py calibrate --images calib/ --cols 9 --rows 6 --square 10   # 1st image: board flat on the belt
 python main.py benchmark                   # time per step – run this on the Pi
-python -m pytest -q                        # 40 tests, incl. complete web workflows with the simulator
+python -m pytest -q                        # 46 tests, incl. complete web workflows with the simulator
 ```
 
 ## Data storage

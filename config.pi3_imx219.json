@@ -1,9 +1,12 @@
 {
   "camera": {
     "source": "pi",
-    "sensor_mode": [1640, 1232],
-    "width": 1280,
-    "height": 960,
+    "sensor_mode": [
+      1640,
+      1232
+    ],
+    "width": 640,
+    "height": 480,
     "fps": 15,
     "exposure_us": 2000,
     "analogue_gain": 1.0

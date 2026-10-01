@@ -39,6 +39,9 @@ class CameraConfig:
     sim_any_angle: bool = False        # parts arrive in any rotation (0–360°)
     sim_defect_rate: float = 0.3
     sim_speed_px: float = 14.0         # conveyor speed per frame
+    sim_defocus: float = 0.0           # simulated lens blur (Gaussian sigma in px)
+    sim_part_scale: float = 1.0        # < 1 = camera mounted higher (parts appear smaller)
+    sim_autofocus: bool = False        # simulate a camera with focus motor (Camera Module 3)
 
 
 @dataclass
@@ -140,7 +143,11 @@ class LightingConfig:
 class InspectionConfig:
     # Several images of the same part while it passes the camera; majority vote.
     # 1 = off. 3 recommended against random false alarms (dust, noise, reflections).
-    shots_per_part: int = 1
+    # Always several images of the same part while it passes the camera, majority vote – random
+    # false alarms (dust, a reflection, sensor noise) disappear. Fixed, minimum 3 (5 is possible).
+    # To save time, the 2nd/3rd image is only evaluated when the 1st is not CLEARLY good.
+    shots_per_part: int = 3
+    confirm_margin: float = 0.5        # 1st image clearly good = every method score below this (half its threshold)
     tie_is_nok: bool = True            # with an even number of shots: tie → NOK (safe side)
 
 
@@ -189,6 +196,21 @@ class CalibrationConfig:
 
 
 @dataclass
+class AutoSetupConfig:
+    # Automatic camera setup when a part type is taught in (see qc/autosetup.py)
+    enabled: bool = True
+    target_level: float = 225.0      # 99.5th percentile of part + surroundings after the setup
+    min_exposure_us: int = 100
+    max_exposure_us: int = 8000      # upper limit before the belt speed is known
+    max_gain: float = 4.0            # more gain = more noise; above that "more light needed"
+    max_blur_px: float = 0.5         # motion blur limit in output pixels (after zoom)
+    max_zoom: float = 2.5            # IMX219 1640×1232 readout → ≥ 656 sensor px for 640 output px
+    margin_along: float = 2.0        # crop length along the belt = 2.0 × part size (room for the trigger)
+    margin_across: float = 1.6       # crop width across the belt = 1.6 × part size (position scatter)
+    edge_width_max_px: float = 3.0   # 10–90 % edge rise above this = image not sharp
+
+
+@dataclass
 class UIConfig:
     # PIN for the setup area (methods, sensitivity, calibration, lighting, GPIO, models).
     # The supervisor screen needs no PIN. "" = setup area without PIN. CHANGE THE DEFAULT.
@@ -212,6 +234,7 @@ class AppConfig:
     drift: DriftConfig = field(default_factory=DriftConfig)
     calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
     ui: UIConfig = field(default_factory=UIConfig)
+    autosetup: AutoSetupConfig = field(default_factory=AutoSetupConfig)
     target_reference_count: int = 15
 
     def to_dict(self) -> dict[str, Any]:

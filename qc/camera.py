@@ -35,6 +35,38 @@ class CameraSource:
     def close(self) -> None:
         pass
 
+    # ---- camera controls for the automatic camera setup (qc/autosetup.py) ----
+    # Sources that cannot be controlled (USB, image folder) keep these defaults.
+    can_control = False          # exposure / gain / crop can be set by software
+    has_autofocus = False        # focus motor (e.g. Camera Module 3)
+    crop = (0.0, 0.0, 1.0, 1.0)  # current sensor crop (x, y, w, h as fractions of the sensor)
+    last_metadata: dict = {}
+
+    def set_exposure(self, exposure_us: int, gain: float) -> None:
+        raise NotImplementedError
+
+    def set_colour_gains(self, gains) -> None:
+        pass
+
+    def set_crop(self, crop) -> None:
+        raise NotImplementedError
+
+    def awb_start(self) -> None:
+        pass
+
+    def awb_result(self):
+        return None
+
+    def set_lens(self, position: float) -> None:
+        pass
+
+    def af_start(self, window) -> None:
+        pass
+
+    def af_state(self) -> tuple[str, float | None]:
+        """("scanning" | "focused" | "failed", lens position in dioptres)."""
+        return "failed", None
+
 
 class PiCameraSource(CameraSource):
     name = "Raspberry Pi camera"
@@ -102,6 +134,59 @@ class PiCameraSource(CameraSource):
         except Exception as e:  # noqa: BLE001
             return f"sensor info unavailable ({e})"
 
+    # ---- controls (applied by libcamera a few frames later; the caller waits for new frames) ----
+    can_control = True
+
+    def _crop_max(self):
+        try:
+            return tuple(self.cam.camera_controls["ScalerCrop"][1])          # (min, max, default)
+        except Exception:  # noqa: BLE001
+            w, h = self.cam.camera_properties.get("PixelArraySize", (0, 0))
+            return 0, 0, w, h
+
+    def set_exposure(self, exposure_us: int, gain: float) -> None:
+        self.cam.set_controls({"AeEnable": False, "ExposureTime": int(exposure_us), "AnalogueGain": float(gain)})
+
+    def set_colour_gains(self, gains) -> None:
+        if gains:
+            self.cam.set_controls({"AwbEnable": False, "ColourGains": (float(gains[0]), float(gains[1]))})
+
+    def set_crop(self, crop) -> None:
+        """Digital zoom: the ISP reads only this part of the sensor and scales it to the output size."""
+        mx, my, mw, mh = self._crop_max()
+        x, y, w, h = crop
+        rect = (int(mx + x * mw), int(my + y * mh), max(64, int(w * mw)), max(48, int(h * mh)))
+        self.cam.set_controls({"ScalerCrop": rect})
+        self.crop = tuple(float(v) for v in crop)
+
+    def awb_start(self) -> None:
+        self.cam.set_controls({"AwbEnable": True})
+
+    def awb_result(self):
+        g = self.last_metadata.get("ColourGains")
+        return (round(float(g[0]), 3), round(float(g[1]), 3)) if g else None
+
+    def set_lens(self, position: float) -> None:
+        if self.has_autofocus and position is not None:
+            self.cam.set_controls({"AfMode": 0, "LensPosition": float(position)})       # 0 = manual
+
+    def af_start(self, window) -> None:
+        """Autofocus run on the part only (window = x, y, w, h as fractions of the current crop)."""
+        if not self.has_autofocus:
+            return
+        cx, cy, cw, ch = self.crop
+        mx, my, mw, mh = self._crop_max()
+        # AfWindows are given relative to the ScalerCropMaximum rectangle
+        x, y, w, h = window
+        rect = (int((cx + x * cw) * mw), int((cy + y * ch) * mh), int(w * cw * mw), int(h * ch * mh))
+        self.cam.set_controls({"AfMode": 1, "AfMetering": 1, "AfWindows": [rect]})   # auto, windows
+        self.cam.set_controls({"AfTrigger": 0})                                       # start
+
+    def af_state(self) -> tuple[str, float | None]:
+        st = self.last_metadata.get("AfState")
+        pos = self.last_metadata.get("LensPosition")
+        return {2: "focused", 3: "failed"}.get(st, "scanning"), (float(pos) if pos is not None else None)
+
     def read(self):
         # picamera2 "RGB888" delivers BGR byte order – matches OpenCV directly.
         # queue=False: always a fresh frame, never one that waited in a buffer while the Pi was busy.
@@ -109,7 +194,8 @@ class PiCameraSource(CameraSource):
         req = self.cam.capture_request()
         try:
             frame = req.make_array("main")
-            ts = req.get_metadata().get("SensorTimestamp")
+            self.last_metadata = req.get_metadata()
+            ts = self.last_metadata.get("SensorTimestamp")
         finally:
             req.release()
         self.last_age_s = max(0.0, (time.monotonic_ns() - ts) / 1e9) if ts else 0.0
@@ -204,6 +290,14 @@ class SimulatorSource(CameraSource):
         self.force_good = False
         self.force_defect = False                 # self-test: next parts are defective
         self.board: dict | None = None            # checkerboard for calibration tests
+        # simulated camera controls (brightness ∝ exposure × gain, nominal = 4000 µs × 1.0)
+        self.exposure = (cfg.exposure_us or 4000, cfg.analogue_gain)
+        self.crop = (0.0, 0.0, 1.0, 1.0)
+        self.has_autofocus = bool(cfg.sim_autofocus)
+        self.defocus = float(cfg.sim_defocus)
+        self.hold = False                          # part lies still in the middle (camera setup)
+        self._af = None
+        self.last_metadata = {}
         self._spawn()
         self.last_time = 0.0
 
@@ -227,9 +321,48 @@ class SimulatorSource(CameraSource):
         self.gap = self.rng.integers(0, 20)
 
     def _layer(self, light: str):
-        if light not in self._layers:
-            self._layers[light] = self.syn.render_layers(self.part, light, self.size[0] / 640.0)
-        return self._layers[light]
+        key = (light, self.crop[2])
+        if key not in self._layers:
+            self._layers[key] = self.syn.render_layers(self.part, light,
+                                                       self.size[0] / 640.0 / self.crop[2] * self.cfg.sim_part_scale)
+        return self._layers[key]
+
+    # ---- simulated camera controls ----
+    can_control = True
+    NOMINAL = 4000.0
+
+    def set_exposure(self, exposure_us: int, gain: float) -> None:
+        self.exposure = (float(exposure_us), float(gain))
+
+    def set_crop(self, crop) -> None:
+        self.crop = tuple(float(v) for v in crop)
+
+    def awb_result(self):
+        return tuple(self.cfg.colour_gains)
+
+    def set_lens(self, position: float) -> None:
+        if self.has_autofocus and position is not None:
+            self.defocus = 0.0 if abs(position - 4.0) < 0.05 else 2.0
+
+    def af_start(self, window) -> None:
+        if self.has_autofocus:
+            self._af = 4                           # "scanning" for a few frames
+
+    def af_state(self) -> tuple[str, float | None]:
+        if not self.has_autofocus:
+            return "failed", None
+        return ("scanning", None) if self._af else ("focused", 4.0)
+
+    def hold_part(self, on: bool) -> None:
+        """Camera setup in the simulator: a good part lies still under the camera."""
+        self.hold = on
+        if on:
+            self.force_good = True
+            self._spawn()
+            self.x = 320.0
+        else:
+            self.force_good = False
+            self._spawn()
 
     @property
     def current_defect(self) -> str | None:
@@ -297,13 +430,24 @@ class SimulatorSource(CameraSource):
         self.last_time = time.time()
         if self.board is not None:
             return self._render_board()
-        self.x += self.cfg.sim_speed_px
+        if self._af:
+            self._af -= 1
+            if not self._af:
+                self.defocus = 0.0
+        if not self.hold:
+            self.x += self.cfg.sim_speed_px
         if self.x > 840 + self.gap * self.cfg.sim_speed_px:
             self._spawn()
-        return self.syn.compose(
-            self.part, (self.x, self.y, self.angle), self.light,
-            self.size, self.rng, layers=self._layer(self.light), background=self._background(self.light),
-        )
+        cx, cy, f = self.crop[0] * 640.0, self.crop[1] * 480.0, self.crop[2]
+        pose = ((self.x - cx) / f, (self.y - cy) / f, self.angle)          # world → zoomed output
+        img = self.syn.compose(self.part, pose, self.light, self.size, self.rng,
+                               layers=self._layer(self.light), background=self._background(self.light))
+        k = self.exposure[0] * self.exposure[1] / self.NOMINAL
+        if abs(k - 1.0) > 1e-3:
+            img = np.clip(img.astype(np.float32) * k, 0, 255).astype(np.uint8)
+        if self.defocus > 0:
+            img = cv2.GaussianBlur(img, (0, 0), self.defocus)
+        return img
 
 
 def open_camera(cfg: CameraConfig) -> CameraSource:
