@@ -6,6 +6,9 @@
     python main.py train  --name X --images folder/
     python main.py inspect --model X img1.png img2.png --out results/
     python main.py archive --name "Batch 42"  zip results + empty the results folder
+    python main.py calibrate --images calib/ --cols 9 --rows 6 --square 10   (1st image: board flat on the belt)
+    python main.py benchmark [--model X --images folder/]   run time per step (e.g. on the Pi)
+    python main.py board --square 10 --out checkerboard.pdf   printable checkerboard for the calibration
     python main.py generate --out data/synth --lighting front
     python main.py evaluate --synthetic      compare methods
     python main.py evaluate --train good/ --test test/   (test/ok, test/nok/<defect_type>)
@@ -56,24 +59,40 @@ def cmd_web(args):
         system.stop()
 
 
+def _calibration(cfg):
+    """(undistort function, mm/px, calibration id) from the saved camera calibration."""
+    from qc import calibration as qcal
+
+    cal = qcal.Calibration.load(cfg.calibration.file)
+    if cal is None:
+        return (lambda f: f), None, None
+    return qcal.Undistorter(cal), cal.mm_per_px(cfg.localization.work_width), cal.id
+
+
 def cmd_train(args):
     from qc.evaluate import load_folder
-    from qc.model import QCModel
+    from qc.recipe import Recipe
 
     cfg = _cfg(args)
-    frames = load_folder(args.images)
-    print(f"{len(frames)} reference images from {args.images}")
-    model = QCModel.train(args.name, frames, cfg.localization, cfg.method)
-    path = model.save(cfg.storage.models_dir)
+    undistort, mm, cal_id = _calibration(cfg)
+    frames = [undistort(f) for f in load_folder(args.images)]
+    print(f"{len(frames)} reference images from {args.images}" + (f" (calibrated, {mm:.4f} mm/px)" if mm else ""))
+    recipe = Recipe.train(args.name, [{"main": f} for f in frames], cfg.localization, {"main": cfg.method}, mm, cal_id)
+    path = recipe.save(cfg.storage.models_dir)
     print(f"Model saved: {path}")
-    print(json.dumps(model.report, indent=2, ensure_ascii=False))
+    print(json.dumps(recipe.report(), indent=2, ensure_ascii=False))
+    for w in recipe.warnings():
+        print("WARNING:", w)
 
 
 def cmd_inspect(args):
-    from qc.model import QCModel
+    from qc.recipe import Recipe
 
     cfg = _cfg(args)
-    model = QCModel.load(Path(cfg.storage.models_dir) / args.model)
+    model = Recipe.load(Path(cfg.storage.models_dir) / args.model)
+    if model.mode != "single":
+        sys.exit("Dual-light models need two images per part – use the web UI with a live camera.")
+    undistort, _, _ = _calibration(cfg)
     out = Path(args.out) if args.out else None
     if out:
         out.mkdir(parents=True, exist_ok=True)
@@ -83,7 +102,7 @@ def cmd_inspect(args):
         if img is None:
             print(f"{f}: cannot be read")
             continue
-        res = model.inspect(img)
+        res = model.inspect({"main": undistort(img)})
         n_nok += res.status != "OK"
         defects = "; ".join(f"{d.label} ({d.detail})" for d in res.defects)
         print(f"{Path(f).name:30s} {res.status:9s} {res.time_ms:6.0f} ms  {defects}")
@@ -107,6 +126,101 @@ def cmd_archive(args):
     print(f"Archived: {Path(cfg.storage.archive_dir) / info['file']}  ({s['inspected']} parts, {s['nok']} NOK)")
     print("Results folder cleared.")
     return 0
+
+
+def cmd_calibrate(args):
+    from qc import calibration as qcal
+    from qc.evaluate import load_folder
+
+    cfg = _cfg(args)
+    frames = load_folder(args.images)
+    sets, size = [], None
+    for i, f in enumerate(frames):
+        c = qcal.find_corners(f, args.cols, args.rows)
+        print(f"image {i + 1}: {'ok' if c is not None else 'checkerboard NOT found'}")
+        if c is None and i == 0:
+            sys.exit("The first image (board flat on the belt) must show the whole checkerboard.")
+        if c is not None:
+            sets.append(c)
+            size = (f.shape[1], f.shape[0])
+    cal = qcal.compute(sets, size, args.cols, args.rows, args.square)
+    cal.save(cfg.calibration.file)
+    print(f"Saved {cfg.calibration.file}: {cal.mm_per_px(cfg.localization.work_width):.5f} mm/px at the working "
+          f"resolution; lens distortion {'corrected (RMS %.2f px)' % cal.rms_px if cal.camera_matrix else 'not corrected'}")
+    if cal.note:
+        print("NOTE:", cal.note)
+    print("Retrain your models.")
+
+
+def cmd_board(args):
+    from qc.calibration import board_pdf
+
+    info = board_pdf(args.out, args.cols, args.rows, args.square)
+    print(f"{args.out}: {info['cols'] + 1} × {info['rows'] + 1} squares of {args.square:g} mm "
+          f"({info['board_mm'][0]:.0f} × {info['board_mm'][1]:.0f} mm), inner corners {args.cols} × {args.rows}.")
+    print("Print at 100 % / 'actual size', check the 100 mm line with a ruler, glue flat onto a rigid plate,")
+    print("then measure a square with a calliper and use THAT value as --square / in the UI.")
+
+
+def cmd_benchmark(args):
+    """Measures the time of every processing step – run it on the Raspberry Pi."""
+    import time
+
+    import numpy as np
+
+    from qc import synthetic as S
+    from qc.alignment import align_part
+    from qc.evaluate import load_folder
+    from qc.model import QCModel, _prepare, decide, merge_defects
+    from qc.recipe import Recipe
+    from qc.visualize import annotate
+
+    cfg = _cfg(args)
+    if args.model:
+        model = Recipe.load(Path(cfg.storage.models_dir) / args.model).channels
+        model = next(iter(model.values()))
+        frames = load_folder(args.images) if args.images else model.reference_frames()
+    else:
+        rng = np.random.default_rng(0)
+        size = (cfg.camera.width, cfg.camera.height)
+        frames = [S.compose(S.make_part("A", None, rng), S.random_pose(rng), "front", size, rng=rng) for _ in range(15)]
+        t0 = time.perf_counter()
+        model = QCModel.train("benchmark", frames, cfg.localization, cfg.method)
+        print(f"Training (15 images {size[0]}×{size[1]}): {(time.perf_counter() - t0) * 1000:.0f} ms")
+    frames = (frames * (args.n // max(1, len(frames)) + 1))[:args.n]
+    t = {"detect": [], "align (rotation search + ECC)": [], "visualise": [], "total": []}
+    for f in frames:
+        t_start = time.perf_counter()
+        work, det = _prepare(f, model.loc_cfg)
+        t1 = time.perf_counter()
+        t["detect"].append(t1 - t_start)
+        if det is None:
+            continue
+        a = align_part(work, det, model.loc_cfg, model.canvas, model.ref_norm)
+        t2 = time.perf_counter()
+        t["align (rotation search + ECC)"].append(t2 - t1)
+        results = []
+        for k, m in model.methods.items():
+            tm = time.perf_counter()
+            results.append(m.score(a, 1.0, model.mm_per_px))
+            t.setdefault(f"method {k}", []).append(time.perf_counter() - tm)
+        ok, dec = decide(results, model.method_cfg)
+        t3 = time.perf_counter()
+        annotate(a, ok, merge_defects(dec), None)
+        t4 = time.perf_counter()
+        t["visualise"].append(t4 - t3)
+        t["total"].append(t4 - t_start)
+    print(f"\n{len(frames)} inspections, input {frames[0].shape[1]}×{frames[0].shape[0]}, "
+          f"working width {model.loc_cfg.work_width} px, rotation search '{model.loc_cfg.rotation_search}':")
+    for k, v in t.items():
+        if v:
+            print(f"  {k:32s} {np.mean(v) * 1000:7.1f} ms  (max {np.max(v) * 1000:.1f})")
+    tot = np.mean(t["total"])
+    shots = cfg.inspection.shots_per_part
+    print(f"\n→ about {60 / tot:.0f} parts/minute with 1 shot per part"
+          + (f", {60 / (tot * shots):.0f} with {shots} shots" if shots > 1 else "")
+          + " (plus camera/trigger time).")
+    print("Faster: smaller localization.work_width, rotation_search 'flip'/'off' for guided parts, fewer methods.")
 
 
 def cmd_generate(args):
@@ -189,6 +303,27 @@ def main(argv=None):
     a.add_argument("--name", help="batch name used in the file name")
     a.add_argument("--list", action="store_true", help="only list existing archives")
     a.set_defaults(func=cmd_archive)
+
+    c = sub.add_parser("calibrate", help="camera calibration from checkerboard images (1st image: board flat on the belt)")
+    c.add_argument("--images", required=True)
+    c.add_argument("--cols", type=int, default=9, help="inner corners per row")
+    c.add_argument("--rows", type=int, default=6, help="inner corners per column")
+    c.add_argument("--square", type=float, default=10.0, help="square size in mm")
+    c.set_defaults(func=cmd_calibrate)
+
+    bd = sub.add_parser("board", help="printable checkerboard PDF (A4, exact scale) for the calibration")
+    bd.add_argument("--out", default="checkerboard.pdf")
+    bd.add_argument("--cols", type=int, default=9, help="inner corners per row")
+    bd.add_argument("--rows", type=int, default=6, help="inner corners per column")
+    bd.add_argument("--square", type=float, default=10.0, help="square size in mm")
+    bd.set_defaults(func=cmd_board)
+
+    b = sub.add_parser("benchmark", help="run time of every processing step (run it on the Pi)")
+    b.add_argument("--model", help="model folder name (default: synthetic test part)")
+    b.add_argument("--images", help="images to inspect (default: the model's references)")
+    b.add_argument("--n", type=int, default=30)
+    method_args(b)
+    b.set_defaults(func=cmd_benchmark)
 
     g = sub.add_parser("generate", help="generate a synthetic test dataset")
     g.add_argument("--out", default="data/synth")

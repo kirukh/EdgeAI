@@ -20,18 +20,22 @@
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink);
          font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; background: var(--card);
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 20px; background: var(--card);
            border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
-  header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+  header h1 { font-size: 16px; margin: 0 6px 0 0; font-weight: 650; letter-spacing: .2px; }
   header .meta { color: var(--muted); font-size: 13px; }
-  .pill { padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 650; background: var(--chip); }
-  .pill.inspecting { background: var(--ok-bg); color: var(--ok); }
-  .pill.learning, .pill.training { background: var(--warn-bg); color: var(--warn); }
-  main { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(300px, 1fr); gap: 16px; padding: 16px 20px; }
+  .pill { padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 650; background: var(--chip); white-space: nowrap; }
+  .pill.inspecting, .pill.good { background: var(--ok-bg); color: var(--ok); }
+  .pill.learning, .pill.training, .pill.selftest, .pill.warn { background: var(--warn-bg); color: var(--warn); }
+  .pill.bad { background: var(--nok-bg); color: var(--nok); }
+  .banner { background: var(--warn-bg); color: var(--warn); padding: 8px 20px; font-size: 13px; border-bottom: 1px solid var(--line); }
+  .banner div + div { margin-top: 2px; }
+  main { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(320px, 1fr); gap: 16px; padding: 16px 20px; }
   @media (max-width: 980px) { main { grid-template-columns: 1fr; padding: 12px 16px; } }
   .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
   .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 10px; font-weight: 650; }
+  .card h3 { font-size: 13px; margin: 14px 0 6px; }
   .live img { width: 100%; display: block; border-radius: 6px; background: #000; aspect-ratio: 4/3; object-fit: contain; }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .row + .row { margin-top: 8px; }
@@ -40,27 +44,37 @@
   button:hover:not(:disabled) { border-color: var(--accent); }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button.danger { color: var(--nok); }
+  button.small { padding: 4px 9px; font-size: 12.5px; }
   button:disabled { opacity: .45; cursor: default; }
   input, select { font: inherit; padding: 7px 9px; border-radius: 7px; border: 1px solid var(--line);
                   background: var(--card); color: var(--ink); min-width: 0; }
   input[type=text] { flex: 1; }
+  input[type=number] { width: 80px; }
   label.check { display: flex; gap: 6px; align-items: center; }
-  .result-head { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
+  .result-head { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; flex-wrap: wrap; }
   .badge { font-size: 26px; font-weight: 800; padding: 4px 18px; border-radius: 8px; letter-spacing: 1px; }
   .badge.OK { background: var(--ok-bg); color: var(--ok); }
   .badge.NOK { background: var(--nok-bg); color: var(--nok); }
   .badge.none, .badge.NO_PART { background: var(--chip); color: var(--muted); font-size: 16px; }
+  .shots { display: flex; gap: 4px; }
+  .shots span { font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 4px; background: var(--chip); }
+  .shots .OK { color: var(--ok); } .shots .NOK { color: var(--nok); }
   .imgs { display: grid; grid-template-columns: 1.3fr 1fr; gap: 10px; }
+  .imgs + .imgs { margin-top: 10px; }
+  .imgs .cap { grid-column: 1 / -1; font-size: 12px; font-weight: 650; color: var(--muted); margin-bottom: -4px; }
   @media (max-width: 640px) { .imgs { grid-template-columns: 1fr; } }
   .imgs img { width: 100%; border-radius: 6px; background: var(--chip); display: block; }
   ol.defects { margin: 10px 0 0; padding-left: 20px; }
   ol.defects li { margin: 3px 0; }
   ol.defects .d { color: var(--muted); font-size: 12.5px; }
+  .ch { font-size: 11px; font-weight: 650; padding: 1px 6px; border-radius: 4px; background: var(--chip); color: var(--muted); }
   .scores { display: grid; grid-template-columns: auto 1fr auto; gap: 6px 10px; align-items: center; margin-top: 12px; font-size: 13px; }
-  .bar { height: 8px; background: var(--chip); border-radius: 4px; position: relative; overflow: hidden; }
+  .scores .note { color: var(--muted); font-size: 11.5px; }
+  .bar { height: 8px; background: var(--chip); border-radius: 4px; position: relative; overflow: hidden; min-width: 60px; }
   .bar i { position: absolute; inset: 0 auto 0 0; background: var(--ok); border-radius: 4px; }
-  .bar i.bad { background: var(--nok); }
-  .bar::after { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--muted); opacity: .6; }
+  .bar i.bad { background: var(--nok); } .bar i.over { background: var(--warn); }
+  .bar b { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--muted); opacity: .7; }
+  .feedback { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line); }
   .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align: center; }
   .stats b { display: block; font-size: 24px; }
   .stats .ok b { color: var(--ok); } .stats .nok b { color: var(--nok); }
@@ -73,21 +87,24 @@
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 6px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
   th { color: var(--muted); font-weight: 600; font-size: 12px; }
-  tbody tr { cursor: pointer; } tbody tr:hover { background: var(--chip); }
+  #history tr { cursor: pointer; } #history tr:hover { background: var(--chip); }
   .tag { font-weight: 700; font-size: 12px; } .tag.OK { color: var(--ok); } .tag.NOK { color: var(--nok); }
-  .models .m { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+  .fb { font-size: 11.5px; font-weight: 650; } .fb.bad { color: var(--warn); } .fb.good { color: var(--ok); }
+  .models .m { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
   .models .m.active { border-color: var(--accent); }
   .models .m .n { font-weight: 650; } .models .m .s { color: var(--muted); font-size: 12.5px; }
-  .msgs { max-height: 220px; overflow: auto; font-size: 12.5px; }
+  .sens { display: grid; grid-template-columns: auto 1fr 44px; gap: 4px 10px; align-items: center; font-size: 12.5px; margin-top: 8px; }
+  .sens input { width: 100%; padding: 0; }
+  .msgs { max-height: 240px; overflow: auto; font-size: 12.5px; }
   .msgs div { padding: 3px 0; border-bottom: 1px dashed var(--line); }
   .msgs .warn { color: var(--warn); } .msgs .error { color: var(--nok); } .msgs .ok { color: var(--ok); }
   details summary { cursor: pointer; color: var(--muted); margin-top: 8px; }
   .settings { display: grid; gap: 6px; margin-top: 8px; }
   .settings select { width: 100%; }
   .hidden { display: none !important; }
-  .toast.ok { background: var(--ok); }
   .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--nok); color: #fff;
-           padding: 9px 16px; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.25); z-index: 10; }
+           padding: 9px 16px; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.25); z-index: 10; max-width: 90vw; }
+  .toast.ok { background: var(--ok); }
   .archives .a { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-top: 8px;
                  display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
   .archives .a .n { font-weight: 600; word-break: break-all; } .archives .a .s { color: var(--muted); font-size: 12.5px; }
@@ -95,21 +112,137 @@
           border-radius: 7px; text-decoration: none; }
   a.btn:hover { border-color: var(--accent); }
   pre.report { white-space: pre-wrap; font-size: 12px; background: var(--chip); padding: 8px; border-radius: 6px; max-height: 260px; overflow: auto; }
+  .tabs { display: flex; gap: 4px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 4px; }
+  .tabs button { flex: 1; border: none; background: transparent; font-weight: 600; color: var(--muted); }
+  .tabs button.on { background: var(--chip); color: var(--ink); }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-size: 13px; }
+  .kv span:nth-child(odd) { color: var(--muted); }
+  .drift td.warn { color: var(--warn); font-weight: 650; }
+  .calprev { width: 100%; border-radius: 6px; margin-top: 8px; }
+  .sl { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--chip); font-size: 12.5px; }
+  .sl .res.good { color: var(--ok); } .sl .res.bad { color: var(--nok); }
+  .step { font-size: 15px; font-weight: 650; padding: 8px 10px; border-radius: 8px; background: var(--warn-bg); color: var(--warn); }
+
+  /* ===================== operator (supervisor) view ===================== */
+  #simple { min-height: 100vh; display: flex; flex-direction: column; font-size: 16px; }
+  .s-top { display: flex; align-items: center; gap: 12px; padding: 12px 20px; background: var(--card);
+           border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .s-top h1 { font-size: 18px; margin: 0; font-weight: 700; }
+  .s-top select { font-size: 16px; padding: 9px 12px; min-width: 200px; }
+  .s-top .grow { flex: 1; }
+  .s-state { font-size: 15px; font-weight: 700; padding: 7px 14px; border-radius: 999px; background: var(--chip); color: var(--muted); }
+  .s-state.run { background: var(--ok-bg); color: var(--ok); } .s-state.busy { background: var(--warn-bg); color: var(--warn); }
+  .s-lock { background: transparent; color: var(--muted); font-size: 14px; }
+  .notices div { padding: 10px 20px; font-size: 15px; border-bottom: 1px solid var(--line); background: var(--chip); }
+  .notices .warn { background: var(--warn-bg); color: var(--warn); } .notices .error { background: var(--nok-bg); color: var(--nok); font-weight: 650; }
+  .s-main { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(320px, 1fr); gap: 16px; padding: 16px 20px; flex: 1;
+            align-content: start; align-items: start; }
+  @media (max-width: 900px) { .s-main { grid-template-columns: 1fr; padding: 12px 16px; } }
+  .s-live img { width: 100%; display: block; border-radius: 8px; background: #000; aspect-ratio: 4/3; object-fit: contain; }
+  .s-panel { display: flex; flex-direction: column; gap: 14px; }
+  .big { border-radius: 12px; text-align: center; padding: 22px 12px; font-size: 64px; font-weight: 850; letter-spacing: 3px;
+         background: var(--chip); color: var(--muted); line-height: 1.1; }
+  .big.OK { background: var(--ok-bg); color: var(--ok); } .big.NOK { background: var(--nok-bg); color: var(--nok); }
+  .big small { display: block; font-size: 15px; font-weight: 600; letter-spacing: 0; margin-top: 6px; }
+  .why { font-size: 17px; } .why li { margin: 4px 0; } .why span { color: var(--muted); font-size: 14px; }
+  .s-last img { width: 100%; max-height: 300px; object-fit: contain; border-radius: 8px; display: block; background: #000; }
+  .why { margin: 0; padding-left: 22px; } .why:empty { display: none; }
+  .s-counts { display: grid; grid-template-columns: repeat(3, 1fr); text-align: center; gap: 8px; }
+  .s-counts b { display: block; font-size: 32px; } .s-counts .ok b { color: var(--ok); } .s-counts .nok b { color: var(--nok); }
+  .dots { display: flex; gap: 5px; flex-wrap: wrap; } .dots i { width: 18px; height: 18px; border-radius: 4px; background: var(--chip); cursor: pointer; }
+  .dots i.OK { background: var(--ok); } .dots i.NOK { background: var(--nok); } .dots i.sel { outline: 2px solid var(--ink); }
+  .bigbtns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .bigbtns button, .s-panel button.big-b { font-size: 18px; font-weight: 700; padding: 18px 12px; border-radius: 10px; }
+  .bigbtns .wide { grid-column: 1 / -1; }
+  button.go { background: var(--ok); border-color: var(--ok); color: #fff; }
+  button.stop { background: var(--nok); border-color: var(--nok); color: #fff; }
+  .s-note { color: var(--muted); font-size: 14px; }
+  .s-wrong { font-size: 15px; }
+  .wiz h2 { font-size: 22px; margin: 0 0 6px; } .wiz p { margin: 6px 0; }
+  .wiz input { font-size: 18px; padding: 12px; width: 100%; }
+  .wiz .count { font-size: 56px; font-weight: 850; text-align: center; } .wiz .count span { font-size: 22px; color: var(--muted); }
+  .wiz .progress { height: 16px; border-radius: 8px; } .wiz .progress i { background: var(--ok); }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; z-index: 20; }
+  .modal .card { width: min(360px, 92vw); } .modal input { font-size: 22px; width: 100%; text-align: center; letter-spacing: 6px; padding: 10px; }
 </style>
 </head>
 <body>
+<!-- ============================ OPERATOR VIEW ============================ -->
+<div id="simple">
+  <div class="s-top">
+    <h1>Quality Inspection</h1>
+    <select id="sModel" title="Part type"></select>
+    <span class="grow"></span>
+    <span class="s-state" id="sState">–</span>
+    <button class="s-lock" id="sLock" title="Setup area for the setup technician (PIN)">🔒 Setup</button>
+  </div>
+  <div class="notices" id="sNotices"></div>
+  <div class="s-main">
+    <div>
+      <div class="s-live"><img id="sLive" alt="Camera image"></div>
+      <div class="row" style="margin-top:8px">
+        <span class="s-note" id="sTrig"></span>
+        <button class="small hidden" id="sCapture" title="For a stopped conveyor">Capture now</button>
+      </div>
+      <div class="s-last hidden" id="sLastWrap">
+        <div class="s-note" style="margin:12px 0 4px">Last inspected part – defects are marked in red</div>
+        <img id="sLast" alt="Last part">
+      </div>
+    </div>
+
+    <div class="s-panel" id="sRun">
+      <div class="big" id="sBig">–<small id="sBigSub">Press Start to begin</small></div>
+      <ul class="why" id="sWhy"></ul>
+      <div class="row s-wrong hidden" id="sWrongRow">
+        <span class="s-note">Result wrong?</span><button id="sWrong"></button><span class="fb good" id="sWrongState"></span>
+      </div>
+      <div class="bigbtns">
+        <button class="go wide" id="sStart">▶ Start inspection</button>
+        <button id="sTeach">＋ Teach in new part</button>
+        <button id="sBatch">✓ Finish batch</button>
+        <button class="small wide" id="sCheck" style="font-size:15px;font-weight:600;padding:10px">Reference part check</button>
+      </div>
+      <div class="s-counts">
+        <div class="ok"><b id="sOK">0</b>OK</div><div class="nok"><b id="sNOK">0</b>NOK</div><div><b id="sRate">–</b>NOK rate</div>
+      </div>
+      <div class="dots" id="sDots" title="Last parts (tap to show)"></div>
+      <div class="s-note" id="sLearnInfo"></div>
+    </div>
+
+    <div class="s-panel wiz hidden" id="sWiz"></div>
+  </div>
+</div>
+
+<div class="modal hidden" id="pinModal">
+  <div class="card">
+    <h2>Setup area</h2>
+    <p class="hint" style="margin-top:0">For the setup technician. Enter the PIN.</p>
+    <input type="password" inputmode="numeric" autocomplete="off" id="pinInput">
+    <div class="row" style="margin-top:12px; justify-content:flex-end">
+      <button id="pinCancel">Cancel</button><button class="primary" id="pinOk">Unlock</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================ SETUP (EXPERT) VIEW ============================ -->
+<div id="expert" class="hidden">
 <header>
+  <button class="small" id="btnOperator" title="Back to the simple operator screen and lock the setup area">← Operator view · lock</button>
   <h1>AI Quality Inspection · Metal Parts</h1>
   <span class="pill" id="mode">–</span>
+  <span class="pill" id="calPill" title="Camera calibration">–</span>
+  <span class="pill" id="stPill" title="Last reference part check">–</span>
+  <span class="pill hidden" id="driftPill" title="Image quality differs from the learning phase">Drift</span>
   <span class="meta" id="cam"></span>
   <span class="meta" id="activeModel"></span>
 </header>
+<div class="banner hidden" id="banner"></div>
 
 <main>
   <div class="col">
     <section class="card live">
       <h2>Live view</h2>
-      <img id="live" src="stream.mjpg" alt="Camera image">
+      <img id="live" alt="Camera image">
       <div class="row" style="margin-top:10px">
         <button id="btnCapture" title="Capture without the trigger (e.g. when the conveyor is stopped)">Manual capture</button>
         <span class="hint" id="triggerHint"></span>
@@ -117,145 +250,272 @@
     </section>
 
     <section class="card">
-      <h2>Latest inspection result</h2>
+      <h2>Inspection result</h2>
       <div class="result-head">
         <span class="badge none" id="resBadge">–</span>
-        <div>
+        <div style="flex:1">
           <div id="resTitle">No inspection yet</div>
           <div class="hint" id="resMeta"></div>
         </div>
+        <div class="shots" id="resShots" title="Result of each shot (majority vote)"></div>
       </div>
-      <div class="imgs" id="resImgs">
-        <img id="resOverlay" alt="">
-        <img id="resDetail" alt="">
-      </div>
+      <div id="resImgs"></div>
       <ol class="defects" id="resDefects"></ol>
       <div class="scores" id="resScores"></div>
+      <div class="feedback hidden" id="feedback">
+        <div class="row">
+          <b style="font-size:13px">Supervisor check:</b>
+          <button class="small" id="fbCorrect">✓ Correct</button>
+          <button class="small" id="fbWrong"></button>
+          <label class="check hidden" id="fbRefWrap" style="font-size:12.5px"><input type="checkbox" id="fbRef" checked> add part as good reference</label>
+          <span class="fb" id="fbState"></span>
+        </div>
+        <p class="hint">Feedback shows the real hit rate in the statistics and the archive. False alarms can be queued as
+          additional references – retrain the model (Models tab) to use them.</p>
+      </div>
     </section>
 
     <section class="card">
       <h2>History</h2>
       <table>
-        <thead><tr><th>Time</th><th>Result</th><th>Defects</th><th id="gtHead">Expected</th><th>ms</th></tr></thead>
+        <thead><tr><th>Time</th><th>Result</th><th>Defects</th><th>Review</th><th id="gtHead">Expected</th><th>ms</th></tr></thead>
         <tbody id="history"></tbody>
       </table>
     </section>
   </div>
 
   <div class="col">
-    <section class="card">
-      <h2>Statistics</h2>
-      <div class="stats">
-        <div class="ok"><b id="cOK">0</b>OK</div>
-        <div class="nok"><b id="cNOK">0</b>NOK</div>
-        <div><b id="cRate">–</b>NOK rate</div>
-      </div>
-      <div class="row" style="margin-top:10px"><button id="btnReset">Reset counters</button></div>
-    </section>
+    <nav class="tabs">
+      <button data-tab="op" class="on">Operation</button>
+      <button data-tab="models">Models</button>
+      <button data-tab="setup">Setup</button>
+    </nav>
 
-    <section class="card archives">
-      <h2>Results archive</h2>
-      <p class="hint" id="pendingInfo" style="margin-top:0"></p>
-      <div class="row">
-        <input type="text" id="archiveLabel" placeholder="Batch name (default: model name)">
-        <button class="primary" id="btnArchive" title="Pack all results into a ZIP file and empty the results folder">Archive &amp; clear results</button>
-      </div>
-      <p class="hint">When a batch is finished: stop the inspection, then archive. The ZIP contains the inspection log,
-        the saved NOK images and a summary. Counters and history are reset for the next batch.</p>
-      <div id="archiveList"></div>
-    </section>
+    <!-- ============================== OPERATION ============================== -->
+    <div class="col" data-pane="op">
+      <section class="card">
+        <h2>Statistics</h2>
+        <div class="stats">
+          <div class="ok"><b id="cOK">0</b>OK</div>
+          <div class="nok"><b id="cNOK">0</b>NOK</div>
+          <div><b id="cRate">–</b>NOK rate</div>
+        </div>
+        <p class="hint" id="fbStats"></p>
+        <div class="row" style="margin-top:10px"><button id="btnReset">Reset counters</button></div>
+      </section>
 
-    <section class="card" id="learnCard">
-      <h2>Learning mode</h2>
-      <div id="learnIdle">
+      <section class="card">
+        <h2>Inspection mode</h2>
         <div class="row">
-          <input type="text" id="learnName" placeholder="Part type, e.g. plate-2-holes">
-          <button class="primary" id="btnLearnStart">Start</button>
+          <select id="modelSelect" style="flex:1"></select>
+          <button class="primary" id="btnInspStart">Start</button>
+          <button id="btnInspStop">Stop</button>
         </div>
-        <p class="hint">Then run 10–20 defect-free parts over the conveyor. Each part is captured automatically when it passes the centre of the image.</p>
-      </div>
-      <div id="learnActive" class="hidden">
-        <div class="row" style="justify-content:space-between"><b id="learnTitle"></b><span id="learnCount"></span></div>
-        <div class="progress" style="margin-top:6px"><i id="learnBar" style="width:0"></i></div>
-        <div class="thumbs" id="thumbs"></div>
-        <p class="hint">Click a thumbnail to remove it (e.g. if a defective part slipped in).</p>
-        <details>
-          <summary>Inspection methods &amp; image representation</summary>
-          <div class="settings" id="methodSettings"></div>
-        </details>
-        <div class="row" style="margin-top:10px">
-          <button class="primary" id="btnLearnFinish">Finish &amp; create model</button>
-          <button id="btnLearnCancel" class="danger">Cancel</button>
+        <p class="hint" id="inspHint"></p>
+      </section>
+
+      <section class="card">
+        <h2>Reference part check (self-test)</h2>
+        <div id="stIdle">
+          <p class="hint" style="margin-top:0">At shift start: feed one known good and one known defective reference part.
+            The system must rate them OK and NOK – otherwise lighting, camera or model have changed.</p>
+          <div class="row" style="margin-top:8px"><button id="btnSelftest">Start self-test</button><span class="hint" id="stLast"></span></div>
         </div>
-      </div>
-      <div id="learnTraining" class="hidden"><p>Training model …</p></div>
-    </section>
+        <div id="stActive" class="hidden">
+          <div class="step" id="stStep"></div>
+          <div class="row" style="margin-top:8px"><button id="btnSelftestCancel">Cancel</button></div>
+        </div>
+      </section>
 
-    <section class="card">
-      <h2>Inspection mode</h2>
-      <div class="row">
-        <select id="modelSelect" style="flex:1"></select>
-        <button class="primary" id="btnInspStart">Start</button>
-        <button id="btnInspStop">Stop</button>
-      </div>
-    </section>
+      <section class="card" id="learnCard">
+        <h2>Learning mode</h2>
+        <div id="learnIdle">
+          <div class="row">
+            <input type="text" id="learnName" placeholder="Part type, e.g. plate-2-holes">
+            <button class="primary" id="btnLearnStart">Start</button>
+          </div>
+          <p class="hint" id="learnHint">Then run 10–20 defect-free parts over the conveyor. Each part is captured automatically when it passes the centre of the image.</p>
+        </div>
+        <div id="learnActive" class="hidden">
+          <div class="row" style="justify-content:space-between"><b id="learnTitle"></b><span id="learnCount"></span></div>
+          <div class="progress" style="margin-top:6px"><i id="learnBar" style="width:0"></i></div>
+          <div class="thumbs" id="thumbs"></div>
+          <p class="hint">Click a thumbnail to remove it (e.g. if a defective part slipped in). Methods and representations:
+            Models tab → “Method settings”.</p>
+          <div class="row" style="margin-top:10px">
+            <button class="primary" id="btnLearnFinish">Finish &amp; create model</button>
+            <button id="btnLearnCancel" class="danger">Cancel</button>
+          </div>
+        </div>
+        <div id="learnTraining" class="hidden"><p>Training model …</p></div>
+      </section>
 
-    <section class="card models">
-      <h2>Models</h2>
-      <div id="models"></div>
-      <pre class="report hidden" id="report"></pre>
-    </section>
+      <section class="card archives">
+        <h2>Results archive</h2>
+        <p class="hint" id="pendingInfo" style="margin-top:0"></p>
+        <div class="row">
+          <input type="text" id="archiveLabel" placeholder="Batch name (default: model name)">
+          <button class="primary" id="btnArchive">Archive &amp; clear results</button>
+        </div>
+        <p class="hint">When a batch is finished: stop the inspection, then archive. The ZIP contains the inspection log,
+          NOK images, supervisor feedback, self-tests and a summary. Counters and history are reset.</p>
+        <div id="archiveList"></div>
+      </section>
 
-    <section class="card hidden" id="simCard">
-      <h2>Simulator</h2>
-      <div class="settings">
-        <label>Lighting
-          <select id="simLight"><option value="front">Front light (lamp above the belt)</option><option value="back">Backlight (lamp below the belt)</option></select>
-        </label>
-        <label>Part type
-          <select id="simPart"><option value="A">A – plate with two holes</option><option value="B">B – hole + slot</option>
-            <option value="C">C – triangle with three holes</option><option value="D">D – square with four holes</option></select>
-        </label>
-        <label>Rotation on the belt
-          <select id="simAngle"><option value="0">Roughly aligned (±6°, sometimes 180°)</option><option value="1">Any rotation (0–360°)</option></select>
-        </label>
-        <label>Defect rate: <span id="simRateVal"></span>
-          <input type="range" id="simRate" min="0" max="1" step="0.05" style="width:100%">
-        </label>
-      </div>
-      <p class="hint">Lighting and part type change the image – existing models will no longer match (teach in again).</p>
-    </section>
+      <section class="card">
+        <h2>Messages</h2>
+        <div class="msgs" id="msgs"></div>
+      </section>
+    </div>
 
-    <section class="card">
-      <h2>Messages</h2>
-      <div class="msgs" id="msgs"></div>
-    </section>
+    <!-- ============================== MODELS ============================== -->
+    <div class="col hidden" data-pane="models">
+      <section class="card">
+        <h2>Method settings</h2>
+        <p class="hint" style="margin-top:0">Used for new models and for “Retrain”.</p>
+        <div class="settings" id="methodSettings"></div>
+      </section>
+      <section class="card models">
+        <h2>Models</h2>
+        <p class="hint" style="margin-top:0">Sensitivity: &gt; 1 = stricter (tighter tolerances/thresholds), &lt; 1 = more tolerant.
+          Takes effect immediately, no retraining needed.</p>
+        <div id="models"></div>
+        <pre class="report hidden" id="report"></pre>
+      </section>
+    </div>
+
+    <!-- ============================== SETUP ============================== -->
+    <div class="col hidden" data-pane="setup">
+      <section class="card">
+        <h2>Inspection settings</h2>
+        <div class="settings">
+          <label>Lighting mode
+            <select id="setLight">
+              <option value="single">Single light</option>
+              <option value="dual">Dual light – backlight (holes/outline) + front light (surface)</option>
+            </select>
+          </label>
+          <label class="check"><input type="checkbox" id="setSelfLearn"> Collect clearly good parts for self-learning</label>
+          <label class="check" style="margin-left:24px"><input type="checkbox" id="setSelfAuto"> Train them in automatically (in the background)</label>
+          <p class="hint" id="selfLearnHint" style="margin:0 0 4px 24px"></p>
+          <label>Shots per part (majority vote)
+            <select id="setShots">
+              <option value="1">1 – off</option><option value="3">3 – recommended against random false alarms</option><option value="5">5</option>
+            </select>
+          </label>
+        </div>
+        <p class="hint">Dual light needs two switchable LED groups (see Outputs) and its own models. Multiple shots
+          apply to single-light mode on a moving belt.</p>
+      </section>
+
+      <section class="card">
+        <h2>Camera calibration (mm)</h2>
+        <div class="kv" id="calInfo"></div>
+        <div id="calSession" class="hidden">
+          <h3>Calibration running – <span id="calCount">0</span> image(s)</h3>
+          <p class="hint" style="margin-top:0" id="calInstr"></p>
+          <div class="row">
+            <button class="primary" id="btnCalCapture">Capture image</button>
+            <button id="btnCalCompute">Compute calibration</button>
+            <button id="btnCalCancel">Cancel</button>
+          </div>
+          <img class="calprev hidden" id="calPreview" alt="">
+        </div>
+        <div id="calIdle">
+          <div class="row" style="margin-top:10px">
+            <label>Inner corners <input type="number" id="calCols" min="3" max="30"> ×
+              <input type="number" id="calRows" min="3" max="30"></label>
+            <label>Square <input type="number" id="calSq" min="0.5" step="0.01"> mm</label>
+          </div>
+          <div class="row"><button class="primary" id="btnCalStart">Start calibration</button>
+            <button class="danger" id="btnCalDelete">Delete calibration</button></div>
+          <p class="hint">Print a checkerboard, measure the square size with a calliper. Image 1: board flat on the belt
+            (defines mm/px). Optionally 5–15 more images, board tilted 20–40° all over the image, to correct lens distortion.
+            Retrain models afterwards.</p>
+        </div>
+        <div class="row hidden" id="simBoard" style="margin-top:8px">
+          <span class="hint">Simulator:</span>
+          <button class="small" id="btnBoardShow">Show checkerboard (new pose)</button>
+          <button class="small" id="btnBoardHide">Hide</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Image quality / drift</h2>
+        <p class="hint" style="margin-top:0">Median of the last parts compared with the learning phase.</p>
+        <table class="drift"><thead><tr><th>Value</th><th>Learned</th><th>Now</th><th>Deviation</th></tr></thead>
+          <tbody id="driftRows"></tbody></table>
+      </section>
+
+      <section class="card">
+        <h2>Outputs (GPIO)</h2>
+        <div class="kv" id="ioInfo"></div>
+        <div class="row" style="margin-top:8px"><button id="btnTestReject">Test reject pulse</button></div>
+        <div class="msgs" id="ioEvents" style="margin-top:8px; max-height:140px"></div>
+        <p class="hint">Pins are set in config.json → "io". Never connect valves, relays or LED strips directly – use a driver board.</p>
+      </section>
+
+      <section class="card hidden" id="simCard">
+        <h2>Simulator</h2>
+        <div class="settings">
+          <label>Lighting (single-light mode)
+            <select id="simLight"><option value="front">Front light (lamp above the belt)</option><option value="back">Backlight (lamp below the belt)</option></select>
+          </label>
+          <label>Part type
+            <select id="simPart"><option value="A">A – plate with two holes</option><option value="B">B – hole + slot</option>
+              <option value="C">C – triangle with three holes</option><option value="D">D – square with four holes</option></select>
+          </label>
+          <label>Rotation on the belt
+            <select id="simAngle"><option value="0">Roughly aligned (±6°, sometimes 180°)</option><option value="1">Any rotation (0–360°)</option></select>
+          </label>
+          <label>Defect rate: <span id="simRateVal"></span>
+            <input type="range" id="simRate" min="0" max="1" step="0.05" style="width:100%">
+          </label>
+        </div>
+        <p class="hint">Lighting and part type change the image – existing models will no longer match (teach in again).</p>
+      </section>
+    </div>
   </div>
 </main>
+</div>
 
 <script>
 const token = new URLSearchParams(location.search).get("token") || "";
+let setupToken = "";
+try { setupToken = sessionStorage.getItem("qc-setup") || ""; } catch (e) {}
 const $ = (id) => document.getElementById(id);
-let opts = null, lastImageId = null, selectedResult = null, lastModelsKey = "", status = null;
+let opts = null, lastImageId = null, selectedResult = null, shownResult = null, lastModelsKey = "", status = null;
+let pendingParts = 0, lastHistoryLen = -1;
 
 async function api(path, method = "GET", body) {
   const r = await fetch(path, {
-    method, headers: { "Content-Type": "application/json", "X-QC-Token": token },
+    method, headers: { "Content-Type": "application/json", "X-QC-Token": token, "X-Setup-Token": setupToken },
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await r.json().catch(() => ({}));
+  if (r.status === 403 && /locked/i.test(data.error || "")) setView("simple");
   if (!r.ok || data.ok === false) { toast(data.error || `Error ${r.status}`); throw new Error(data.error); }
   return data;
 }
-
 function toast(text, kind) {
   const t = document.createElement("div"); t.className = "toast" + (kind === "ok" ? " ok" : ""); t.textContent = text;
-  document.body.appendChild(t); setTimeout(() => t.remove(), 4000);
+  document.body.appendChild(t); setTimeout(() => t.remove(), 4500);
 }
-
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const MODE = { idle: "Ready", learning: "Learning", training: "Training", inspecting: "Inspection running" };
+const MODE = { idle: "Ready", learning: "Learning", training: "Training", inspecting: "Inspection running", selftest: "Self-test" };
+const CH = { front: "Front light", back: "Backlight", main: "" };
+const FB = { false_alarm: ["false alarm", "bad"], missed: ["missed defect", "bad"], confirmed_ok: ["✓ confirmed", "good"],
+             confirmed_nok: ["✓ confirmed", "good"] };
 
+// ---------------------------------------------------------------- tabs
+document.querySelectorAll(".tabs button").forEach((b) => b.onclick = () => {
+  document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x === b));
+  document.querySelectorAll("[data-pane]").forEach((p) => p.classList.toggle("hidden", p.dataset.pane !== b.dataset.tab));
+  try { localStorage.setItem("qc-tab", b.dataset.tab); } catch (e) {}
+});
+try { const t = localStorage.getItem("qc-tab"); if (t) document.querySelector(`.tabs button[data-tab="${t}"]`)?.click(); } catch (e) {}
+
+// ------------------------------------------------------ method settings
 function methodSettings() {
   const d = opts.defaults;
   const checks = Object.entries(opts.methods).map(([k, v]) =>
@@ -264,55 +524,109 @@ function methodSettings() {
     `<option value="${k}" ${k === cur ? "selected" : ""}>${esc(v)}</option>`).join("") + "</select>";
   $("methodSettings").innerHTML = checks +
     `<label>Representation for reference comparison ${sel("diffRep", d.diff_representation)}</label>` +
-    `<label>Representation for ML anomaly detection ${sel("pcaRep", d.pca_representation)}</label>`;
+    `<label>Representation for ML anomaly detection ${sel("pcaRep", d.pca_representation)}</label>` +
+    `<p class="hint">Decision: ${opts.decision === "fusion" ? "fusion – a method decides alone only above its level (ML ×" +
+      opts.standalone.pca + "), otherwise two methods must agree" : "OR – any method ≥ 1 → NOK"}. In dual-light mode the backlight channel always uses geometry.</p>`;
 }
-
 function currentMethodSettings() {
-  return {
-    methods: [...document.querySelectorAll('input[name=method]:checked')].map((e) => e.value),
-    diff_representation: $("diffRep").value, pca_representation: $("pcaRep").value,
-  };
+  return { methods: [...document.querySelectorAll('input[name=method]:checked')].map((e) => e.value),
+           diff_representation: $("diffRep").value, pca_representation: $("pcaRep").value };
 }
 
+// ---------------------------------------------------------------- result
 function showResult(r) {
   if (!r) return;
+  shownResult = r;
   $("resBadge").className = "badge " + r.status;
   $("resBadge").textContent = r.status === "NO_PART" ? "no part" : r.status;
-  $("resTitle").textContent = `Model: ${r.model}`;
+  $("resTitle").textContent = `Model: ${r.model}` + (r.selftest ? ` · self-test (${r.selftest} part)` : "");
   const gt = r.ground_truth ? ` · Expected: ${r.ground_truth}` : "";
-  $("resMeta").textContent = `${r.timestamp.replace("T", " ").slice(0, 19)} · ${r.time_ms} ms${gt}`;
-  if (r.image_id) {
-    $("resOverlay").src = `api/results/${r.image_id}/overlay.jpg`;
-    $("resDetail").src = `api/results/${r.image_id}/detail.jpg`;
-  }
-  $("resImgs").classList.toggle("hidden", !r.image_id);
+  $("resMeta").textContent = `#${r.image_id} · ${r.timestamp.replace("T", " ").slice(0, 19)} · ${r.time_ms} ms${gt}`;
+  $("resShots").innerHTML = (r.shots || []).length > 1 ? r.shots.map((s) => `<span class="${s}">${s === "NO_PART" ? "–" : s}</span>`).join("") : "";
+  const chans = r.channels && r.channels.length ? r.channels : [];
+  $("resImgs").innerHTML = chans.map((c, i) => `<div class="imgs">
+      ${chans.length > 1 ? `<div class="cap">${esc(CH[c] || c)}</div>` : ""}
+      <img src="api/results/${r.image_id}/${i}/overlay.jpg" alt=""><img src="api/results/${r.image_id}/${i}/detail.jpg" alt=""></div>`).join("");
   $("resDefects").innerHTML = r.defects.map((d) =>
-    `<li><b>${esc(d.label)}</b> <span class="d">– ${esc(d.detail)} (${esc(opts.methods[d.method] || d.method)})</span></li>`).join("");
+    `<li><b>${esc(d.label)}</b> ${d.channel ? `<span class="ch">${esc(CH[d.channel] || d.channel)}</span>` : ""}
+      <span class="d">– ${esc(d.detail)} (${esc(opts.methods[d.method] || d.method)})</span></li>`).join("");
   $("resScores").innerHTML = r.methods.map((m) => {
     const w = Math.min(100, m.score * 50);
-    return `<span>${esc(m.label)}</span><div class="bar"><i class="${m.ok ? "" : "bad"}" style="width:${w}%"></i></div><span>${m.score.toFixed(2)}</span>`;
+    const cls = m.decisive ? "bad" : m.score >= 1 ? "over" : "";
+    const marks = `<b style="left:50%"></b>` + (m.standalone > 1 ? `<b style="left:${Math.min(99, m.standalone * 50)}%"></b>` : "");
+    const note = m.score >= 1 && !m.decisive ? `<div class="note">below its stand-alone level ${m.standalone} – not confirmed by a 2nd method</div>` : "";
+    return `<span>${esc(m.label)}${m.channel ? ` <span class="ch">${esc(CH[m.channel] || m.channel)}</span>` : ""}${note}</span>
+      <div class="bar"><i class="${cls}" style="width:${w}%"></i>${marks}</div><span>${m.score.toFixed(2)}</span>`;
   }).join("");
+  // feedback
+  const canFb = (r.status === "OK" || r.status === "NOK") && !r.selftest;
+  $("feedback").classList.toggle("hidden", !canFb);
+  if (canFb) {
+    $("fbWrong").textContent = r.status === "NOK" ? "✗ Was OK – false alarm" : "✗ Was NOK – missed defect";
+    $("fbRefWrap").classList.toggle("hidden", r.status !== "NOK");
+    const f = FB[r.feedback];
+    $("fbState").textContent = f ? f[0] + (r.reference_added ? " · queued as reference" : "") : "";
+    $("fbState").className = "fb " + (f ? f[1] : "");
+  }
 }
 
+async function sendFeedback(correct) {
+  const r = shownResult; if (!r) return;
+  const verdict = correct ? r.status.toLowerCase() : (r.status === "NOK" ? "ok" : "nok");
+  const addRef = !correct && r.status === "NOK" && $("fbRef").checked;
+  const res = await api(`api/results/${r.image_id}/feedback`, "POST", { verdict, add_reference: addRef });
+  r.feedback = res.outcome; if (addRef) r.reference_added = true;
+  showResult(r); loadHistory(); lastModelsKey = "";
+  if (res.pending) toast(`Queued as reference (${res.pending} pending) – retrain the model in the Models tab`, "ok");
+}
+$("fbCorrect").onclick = () => sendFeedback(true);
+$("fbWrong").onclick = () => sendFeedback(false);
+
+// ---------------------------------------------------------------- render
 function render(s) {
   status = s;
   $("mode").textContent = MODE[s.mode] || s.mode;
   $("mode").className = "pill " + s.mode;
   $("cam").textContent = `${s.camera} · ${s.fps} fps`;
   $("activeModel").textContent = s.model ? `Model: ${s.model.name}` : "no model loaded";
+  const cal = s.calibration;
+  $("calPill").textContent = cal.calibrated ? `${cal.mm_per_px} mm/px` : "not calibrated (px)";
+  $("calPill").className = "pill " + (cal.calibrated ? "good" : "");
+  const st = s.selftest.last;
+  const today = new Date().toISOString().slice(0, 10);
+  if (!st) { $("stPill").textContent = "no self-test"; $("stPill").className = "pill warn"; }
+  else {
+    const t = st.time.replace("T", " ").slice(0, 16);
+    $("stPill").textContent = `self-test ${st.passed ? "passed" : "FAILED"} ${st.time.slice(0, 10) === today ? t.slice(11) : t}`;
+    $("stPill").className = "pill " + (!st.passed ? "bad" : st.time.slice(0, 10) === today ? "good" : "warn");
+  }
+  const dw = s.drift.warnings;
+  $("driftPill").classList.toggle("hidden", !dw.length);
+  $("driftPill").textContent = `Drift: ${dw.length} warning${dw.length > 1 ? "s" : ""}`;
+  $("driftPill").className = "pill warn" + (dw.length ? "" : " hidden");
+  const banner = [...s.model_warnings, ...dw.map((w) => "Image quality drift: " + w + " – check lighting/camera.")];
+  $("banner").innerHTML = banner.map((b) => `<div>⚠ ${esc(b)}</div>`).join("");
+  $("banner").classList.toggle("hidden", !banner.length);
+
   $("triggerHint").textContent = s.continuous
     ? (s.mode === "idle" ? "Trigger inactive (start learning or inspection mode first)" : s.armed ? "Trigger armed – waiting for the next part" : "Part captured – waiting until it leaves the image")
     : "Image folder: automatic in inspection mode, click to capture in learning mode";
-  $("btnCapture").disabled = !["learning", "inspecting"].includes(s.mode);
+  $("btnCapture").disabled = !["learning", "inspecting", "selftest"].includes(s.mode);
 
-  const c = s.counts, total = c.OK + c.NOK;
+  const c = s.counts, total = c.OK + c.NOK, f = s.feedback;
   $("cOK").textContent = c.OK; $("cNOK").textContent = c.NOK;
   $("cRate").textContent = total ? `${(100 * c.NOK / total).toFixed(1)} %` : "–";
+  const rev = f.confirmed + f.false_alarm + f.missed;
+  $("fbStats").textContent = rev ? `Supervisor review of ${rev} result(s): ${f.confirmed} confirmed, ${f.false_alarm} false alarm(s), ` +
+    `${f.missed} missed defect(s) → ${(100 * f.confirmed / rev).toFixed(0)} % correct` : "No supervisor review yet – use “Supervisor check” below a result.";
 
+  // learning
   $("learnIdle").classList.toggle("hidden", s.mode === "learning" || s.mode === "training");
   $("learnActive").classList.toggle("hidden", s.mode !== "learning");
   $("learnTraining").classList.toggle("hidden", s.mode !== "training");
   $("btnLearnStart").disabled = s.mode !== "idle";
+  $("learnHint").textContent = "Then run 10–20 defect-free parts over the conveyor. Each part is captured automatically when it passes the centre of the image."
+    + (s.settings.lighting_mode === "dual" ? " Dual light: each part is captured with backlight and front light." : "");
   if (s.mode === "learning") {
     const L = s.learning;
     $("learnTitle").textContent = L.name;
@@ -325,10 +639,43 @@ function render(s) {
     }
     $("btnLearnFinish").disabled = L.count < 3;
   }
-  $("btnInspStart").disabled = !["idle"].includes(s.mode);
-  $("btnInspStop").disabled = s.mode !== "inspecting";
+  // inspection
+  $("btnInspStart").disabled = s.mode !== "idle";
+  $("btnInspStop").disabled = !["inspecting", "selftest"].includes(s.mode);
+  $("inspHint").textContent = `${s.settings.lighting_mode === "dual" ? "Dual light" : "Single light"} · ${s.settings.shots_per_part} shot(s) per part`
+    + (s.io.reject_pin != null ? ` · reject on GPIO ${s.io.reject_pin} (${s.io.backend})` : "");
+  // self-test
+  const act = s.selftest.active;
+  $("stIdle").classList.toggle("hidden", !!act); $("stActive").classList.toggle("hidden", !act);
+  $("btnSelftest").disabled = s.mode !== "idle" || !s.model;
+  if (act) $("stStep").textContent = act.step === "good" ? "Step 1/2: feed the known GOOD reference part" : "Step 2/2: feed the known DEFECTIVE reference part";
+  $("stLast").textContent = st ? `Last: ${st.passed ? "passed" : "FAILED"} (${st.time.replace("T", " ").slice(0, 16)}, ${st.model})` : "";
+
+  // setup
+  if (document.activeElement?.closest("[data-pane=setup]") == null) {
+    $("setLight").value = s.settings.lighting_mode; $("setShots").value = String(s.settings.shots_per_part);
+    $("setSelfLearn").checked = s.settings.self_learning;
+    $("setSelfAuto").checked = s.settings.self_learning_auto;
+  }
+  $("setLight").disabled = s.mode !== "idle";
+  $("selfLearnHint").textContent = `Only parts with every method below ${Math.round(s.settings.self_learning_margin * 100)} % of its threshold, `
+    + `max. ${s.settings.self_learning_max_pool} per model, not while a drift warning is active. `
+    + (s.settings.self_learning_auto ? `Trained in automatically every ${s.settings.self_learning_every} parts (safety checks; rejected pools are discarded).`
+                                     : "Trained in only with the button in the Models tab.");
+  renderCalibration(cal, s);
+  $("driftRows").innerHTML = s.drift.rows.length ? s.drift.rows.map((r) => `<tr><td>${esc(r.label)}</td><td>${r.reference}</td>
+      <td>${r.current}</td><td class="${r.warning ? "warn" : ""}">${esc(r.deviation)}${r.warning ? " ⚠" : ""}</td></tr>`).join("")
+    : `<tr><td colspan="4" class="hint">No data yet – inspect some parts.</td></tr>`;
+  const io = s.io;
+  const pin = (p) => p == null ? "–" : `GPIO ${p}`;
+  $("ioInfo").innerHTML = `<span>Backend</span><span>${io.backend === "gpio" ? "Raspberry Pi GPIO" : "simulated (no GPIO)"}</span>
+    <span>Reject</span><span>${pin(io.reject_pin)}${io.reject_pin != null ? `, ${io.reject_delay_ms} ms after capture` : ""} · ${io.rejects} rejected</span>
+    <span>OK / NOK lamp</span><span>${pin(io.ok_lamp_pin)} / ${pin(io.nok_lamp_pin)}</span>
+    <span>Front / back light</span><span>${pin(io.front_light_pin)} / ${pin(io.back_light_pin)} · on: ${esc(io.light || "–")}</span>`;
+  $("ioEvents").innerHTML = io.events.map((e) => `<div>${e.t} · ${esc(e.text)}</div>`).join("");
 
   $("simCard").classList.toggle("hidden", !s.sim);
+  $("simBoard").classList.toggle("hidden", !s.sim);
   $("gtHead").classList.toggle("hidden", !s.sim);
   if (s.sim && document.activeElement?.closest("#simCard") == null) {
     $("simLight").value = s.sim.lighting; $("simPart").value = s.sim.part_type; $("simAngle").value = s.sim.any_angle ? "1" : "0";
@@ -340,29 +687,59 @@ function render(s) {
   if (s.last_result && s.last_result.image_id !== lastImageId && !selectedResult) {
     lastImageId = s.last_result.image_id; showResult(s.last_result); loadHistory(); loadArchives();
   }
-  const key = (s.model?.slug || "") + s.mode;
+  const key = (s.model?.slug || "") + s.mode + (s.model?.pending ?? "") + JSON.stringify(s.model?.sensitivity || {})
+    + (s.model?.learned ?? "") + (s.model?.known_bad ?? "") + (s.model?.collected ? "c" : "") + (s.last_self_learning?.time || "");
+  if (s.model) {        // live counter without re-rendering the model list
+    const c = $(`coll-${s.model.slug}`), lb = $(`lbtn-${s.model.slug}`);
+    if (c) c.textContent = s.model.collected;
+    if (lb) lb.textContent = `Learn collected good parts (+${s.model.collected})`;
+  }
   if (key !== lastModelsKey) { lastModelsKey = key; loadModels(); loadArchives(); }
-  $("btnArchive").disabled = s.mode === "inspecting" || s.mode === "training" || !pendingParts;
-  $("btnArchive").title = s.mode === "inspecting" ? "Stop the inspection first"
-    : "Pack all results into a ZIP file and empty the results folder";
+  $("btnArchive").disabled = ["inspecting", "training", "selftest"].includes(s.mode) || !pendingParts;
+  $("btnArchive").title = s.mode === "inspecting" ? "Stop the inspection first" : "Pack all results into a ZIP file and empty the results folder";
+}
+
+function renderCalibration(cal, s) {
+  $("calInfo").innerHTML = cal.calibrated
+    ? `<span>Scale</span><span><b>${cal.mm_per_px} mm/px</b> (1 px ≈ ${(cal.mm_per_px * 1000).toFixed(0)} µm)</span>
+       <span>Lens distortion</span><span>${cal.distortion ? `corrected (RMS ${cal.rms_px} px)` : "not corrected"}</span>
+       <span>Board / images</span><span>${cal.board.cols} × ${cal.board.rows}, ${cal.board.square_mm} mm · ${cal.n_images} image(s)</span>
+       <span>Calibrated</span><span>${esc(cal.id)}</span>` + (cal.note ? `<span>Note</span><span style="color:var(--warn)">${esc(cal.note)}</span>` : "")
+    : `<span>Status</span><span>not calibrated – dimensions in pixels, learned tolerances</span>`;
+  const sess = cal.session;
+  $("calSession").classList.toggle("hidden", !sess); $("calIdle").classList.toggle("hidden", !!sess);
+  if (sess) {
+    $("calCount").textContent = sess.count;
+    $("calInstr").textContent = sess.count === 0
+      ? `Image 1: lay the ${sess.cols} × ${sess.rows} board (${sess.square_mm} mm squares) flat on the belt, then “Capture image”.`
+      : sess.count < 5 ? `Scale can be computed now. For lens distortion: ${5 - sess.count} more image(s), board tilted 20–40° at different positions.`
+      : "Enough images – capture more (up to 15) or compute.";
+    $("btnCalCompute").disabled = sess.count < 1;
+  } else if (document.activeElement?.closest("#calIdle") == null) {
+    const d = cal.defaults; $("calCols").value ||= d.cols; $("calRows").value ||= d.rows; $("calSq").value ||= d.square_mm;
+  }
+  $("btnCalDelete").disabled = !cal.calibrated;
+  $("btnCalStart").disabled = s.mode !== "idle";
 }
 
 async function loadHistory() {
   const h = await (await fetch("api/results")).json();
-  $("history").innerHTML = h.map((r, i) => `<tr data-i="${i}">
-      <td>${r.timestamp.slice(11, 19)}</td><td><span class="tag ${r.status}">${r.status}</span></td>
+  $("history").innerHTML = h.map((r, i) => {
+    const f = FB[r.feedback];
+    return `<tr data-i="${i}">
+      <td>${r.timestamp.slice(11, 19)}</td><td><span class="tag ${r.status}">${r.selftest ? "ST " : ""}${r.status}</span></td>
       <td>${esc(r.defects.map((d) => d.label).join(", "))}</td>
-      <td class="${status?.sim ? "" : "hidden"}">${esc(r.ground_truth || "")}</td><td>${r.time_ms.toFixed(0)}</td></tr>`).join("");
+      <td>${f ? `<span class="fb ${f[1]}">${f[0]}</span>` : ""}</td>
+      <td class="${status?.sim ? "" : "hidden"}">${esc(r.ground_truth || "")}</td><td>${r.time_ms.toFixed(0)}</td></tr>`;
+  }).join("");
   $("history").onclick = (e) => {
     const tr = e.target.closest("tr"); if (!tr) return;
     selectedResult = h[+tr.dataset.i]; showResult(selectedResult);
-    setTimeout(() => { selectedResult = null; }, 15000);
+    clearTimeout(window._selT); window._selT = setTimeout(() => { selectedResult = null; }, 30000);
   };
 }
 
-let pendingParts = 0;
 const fmtSize = (b) => b > 1048576 ? (b / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1024)) + " KB";
-
 async function loadArchives() {
   const d = await (await fetch("api/archives")).json();
   const p = d.pending;
@@ -376,55 +753,91 @@ async function loadArchives() {
     return `<div class="a">
       <div><div class="n">${esc(a.file)}</div><div class="s">${info}${fmtSize(a.size_bytes)} · ${a.created.replace("T", " ")}</div></div>
       <div class="row"><a class="btn" href="api/archives/${encodeURIComponent(a.file)}" download>Download</a>
-        <button class="danger" data-f="${esc(a.file)}">Delete</button></div>
-    </div>`;
+        <button class="danger" data-f="${esc(a.file)}">Delete</button></div></div>`;
   }).join("");
 }
-
 $("archiveList").addEventListener("click", async (e) => {
   const b = e.target.closest("button[data-f]"); if (!b) return;
-  if (confirm(`Permanently delete the archive ${b.dataset.f}?`)) {
-    await api(`api/archives/${encodeURIComponent(b.dataset.f)}`, "DELETE"); loadArchives();
-  }
+  if (confirm(`Permanently delete the archive ${b.dataset.f}?`)) { await api(`api/archives/${encodeURIComponent(b.dataset.f)}`, "DELETE"); loadArchives(); }
 });
-
 $("btnArchive").onclick = async () => {
   const label = $("archiveLabel").value.trim() || status?.model?.name || "batch";
   if (!confirm(`Archive ${pendingParts} result(s) as “${label}” and clear the results folder?`)) return;
   const r = await api("api/archives", "POST", { label });
-  $("archiveLabel").value = ""; lastImageId = null; $("history").innerHTML = "";
-  $("resBadge").className = "badge none"; $("resBadge").textContent = "–";
-  $("resTitle").textContent = "No inspection yet"; $("resMeta").textContent = "";
-  $("resImgs").classList.add("hidden"); $("resDefects").innerHTML = ""; $("resScores").innerHTML = "";
-  toast(`Archived: ${r.file}`, "ok");
-  loadArchives();
+  $("archiveLabel").value = ""; lastImageId = null; shownResult = null; $("history").innerHTML = "";
+  $("resBadge").className = "badge none"; $("resBadge").textContent = "–"; $("resShots").innerHTML = "";
+  $("resTitle").textContent = "No inspection yet"; $("resMeta").textContent = ""; $("feedback").classList.add("hidden");
+  $("resImgs").innerHTML = ""; $("resDefects").innerHTML = ""; $("resScores").innerHTML = "";
+  toast(`Archived: ${r.file}`, "ok"); loadArchives();
 };
 
+// ---------------------------------------------------------------- models
 async function loadModels() {
   const models = await (await fetch("api/models")).json();
   const active = status?.model?.slug;
+  const sel = $("modelSelect").value;
   $("modelSelect").innerHTML = models.length
-    ? models.map((m) => `<option value="${m.slug}" ${m.slug === active ? "selected" : ""}>${esc(m.name)}</option>`).join("")
+    ? models.map((m) => `<option value="${m.slug}" ${m.slug === (active || sel) ? "selected" : ""}>${esc(m.name)}${m.mode === "dual" ? " (dual light)" : ""}</option>`).join("")
     : "<option value=''>– teach in a model first –</option>";
-  $("models").innerHTML = models.length ? models.map((m) => `
-    <div class="m ${m.slug === active ? "active" : ""}">
-      <div class="n">${esc(m.name)}</div>
-      <div class="s">${m.n_samples} references · ${m.methods.map((x) => esc(opts.methods[x] || x)).join(", ")}
-        · comparison: ${esc(m.diff_representation)} · ML: ${esc(m.pca_representation)} · ${m.created.replace("T", " ")}</div>
-      <div class="row" style="margin-top:6px">
-        <button data-a="report" data-s="${m.slug}">Training report</button>
-        <button data-a="retrain" data-s="${m.slug}" title="Retrain with the settings from 'Inspection methods & image representation'">Retrain</button>
-        <button data-a="delete" data-s="${m.slug}" class="danger">Delete</button>
-      </div>
-    </div>`).join("") : `<p class="hint">No models yet.</p>`;
+  $("models").innerHTML = models.length ? models.map((m) => {
+    const meth = Object.entries(m.methods).map(([ch, ms]) => (m.mode === "dual" ? `${CH[ch]}: ` : "") + ms.map((x) => esc(opts.methods[x] || x)).join(", ")).join(" · ");
+    const sens = ["geometry", "diff", "pca"].map((k) => `<span>${esc(opts.methods[k])}</span>
+        <input type="range" min="0.5" max="2" step="0.05" value="${m.sensitivity[k] ?? 1}" data-sens="${k}" data-s="${m.slug}">
+        <span id="sv-${m.slug}-${k}">×${(m.sensitivity[k] ?? 1).toFixed(2)}</span>`).join("");
+    return `<div class="m ${m.slug === active ? "active" : ""}">
+      <div class="n">${esc(m.name)} ${m.mode === "dual" ? '<span class="ch">dual light</span>' : ""}</div>
+      <div class="s">${m.n_samples} references · ${meth}<br>comparison: ${esc(m.diff_representation)} · ML: ${esc(m.pca_representation)}
+        · ${m.mm_per_px ? `${m.mm_per_px.toFixed(4)} mm/px` : "px (uncalibrated)"} · ${m.created.replace("T", " ")}</div>
+      <div class="sens">${sens}</div>
+      <div class="sl"><b>Self-learning</b> · <span id="coll-${m.slug}">${m.collected}</span> collected good part(s) waiting ·
+        ${m.learned} learned · ${m.anchor} taught-in anchor refs · ${m.known_bad} known defective part(s) for the safety check
+        ${m.known_bad ? "" : `<div class="hint" style="margin:2px 0 0">Tip: run the self-test or confirm NOK results (“✓ Correct”) –
+          these parts are kept and a new model must still detect them. Without them only the threshold check is active.</div>`}
+        ${slLast(m.last_self_learning)}
+        <div class="row" style="margin-top:6px">
+          <button class="small ${m.collected ? "primary" : ""}" data-a="learn" data-s="${m.slug}" id="lbtn-${m.slug}" ${m.collected ? "" : "disabled"}
+            title="Train the collected good parts in – only applied if the safety checks pass">Learn collected good parts (+${m.collected})</button>
+          <button class="small" data-a="discard" data-s="${m.slug}" ${m.collected ? "" : "disabled"}>Discard collected</button>
+        </div></div>
+      <div class="row" style="margin-top:8px">
+        <button class="small" data-a="sens" data-s="${m.slug}">Save sensitivity</button>
+        <button class="small" data-a="report" data-s="${m.slug}">Training report</button>
+        <button class="small ${m.pending ? "primary" : ""}" data-a="retrain" data-s="${m.slug}"
+          title="Retrain with the method settings above${m.pending ? " and the queued feedback references" : ""}">Retrain${m.pending ? ` (+${m.pending} feedback ref.)` : ""}</button>
+        <button class="small danger" data-a="delete" data-s="${m.slug}">Delete</button>
+      </div></div>`;
+  }).join("") : `<p class="hint">No models yet.</p>`;
+}
+function slLast(r) {
+  if (!r) return "";
+  const when = r.time.replace("T", " ").slice(0, 16);
+  if (r.accepted) {
+    const pca = r.thresholds.find((t) => t.method === "pca");
+    return `<div class="res good">✓ ${when}: ${r.collected} part(s) learned${pca ? `, ML threshold ${pca.change_percent > 0 ? "+" : ""}${pca.change_percent} %` : ""}, `
+      + `known defective parts ${r.known_bad.still_detected}/${r.known_bad.checked} still detected</div>`;
+  }
+  return `<div class="res bad">✗ ${when}: rejected – ${esc(r.reasons.join(" "))}</div>`;
 }
 
+$("models").addEventListener("input", (e) => {
+  const i = e.target.closest("input[data-sens]"); if (!i) return;
+  $(`sv-${i.dataset.s}-${i.dataset.sens}`).textContent = "×" + (+i.value).toFixed(2);
+});
 $("models").addEventListener("click", async (e) => {
   const b = e.target.closest("button"); if (!b) return;
   const slug = b.dataset.s;
   if (b.dataset.a === "report") {
     const r = await (await fetch(`api/models/${slug}`)).json();
-    $("report").textContent = JSON.stringify(r.report, null, 2); $("report").classList.remove("hidden");
+    $("report").textContent = (r.warnings.length ? "Warnings:\n- " + r.warnings.join("\n- ") + "\n\n" : "") + JSON.stringify(r.report, null, 2);
+    $("report").classList.remove("hidden");
+  } else if (b.dataset.a === "sens") {
+    const vals = {};
+    b.closest(".m").querySelectorAll("input[data-sens]").forEach((i) => vals[i.dataset.sens] = +i.value);
+    await api(`api/models/${slug}/sensitivity`, "POST", vals); toast("Sensitivity saved", "ok");
+  } else if (b.dataset.a === "learn") {
+    await api(`api/models/${slug}/learn-collected`, "POST"); toast("Learning collected good parts … see Messages", "ok");
+  } else if (b.dataset.a === "discard" && confirm("Discard all collected good parts of this model?")) {
+    await api(`api/models/${slug}/discard-collected`, "POST"); lastModelsKey = "";
   } else if (b.dataset.a === "retrain") {
     await api(`api/models/${slug}/retrain`, "POST", currentMethodSettings());
   } else if (b.dataset.a === "delete" && confirm("Really delete this model?")) {
@@ -432,6 +845,7 @@ $("models").addEventListener("click", async (e) => {
   }
 });
 
+// ---------------------------------------------------------------- actions
 $("thumbs").addEventListener("click", (e) => {
   if (e.target.dataset.i !== undefined) api("api/learn/undo", "POST", { index: +e.target.dataset.i }).then(() => $("thumbs").innerHTML = "");
 });
@@ -442,20 +856,271 @@ $("btnInspStart").onclick = () => api("api/inspect/start", "POST", { model: $("m
 $("btnInspStop").onclick = () => api("api/inspect/stop", "POST");
 $("btnCapture").onclick = () => api("api/capture", "POST");
 $("btnReset").onclick = () => api("api/counters/reset", "POST").then(() => { lastImageId = null; $("history").innerHTML = ""; });
+$("btnSelftest").onclick = async () => {
+  if ($("modelSelect").value && $("modelSelect").value !== status?.model?.slug) await api(`api/models/${$("modelSelect").value}/select`, "POST");
+  api("api/selftest/start", "POST");
+};
+$("btnSelftestCancel").onclick = () => api("api/inspect/stop", "POST");
+$("setLight").onchange = (e) => api("api/settings", "POST", { lighting_mode: e.target.value }).catch(() => {});
+$("setShots").onchange = (e) => api("api/settings", "POST", { shots_per_part: +e.target.value });
+$("setSelfLearn").onchange = (e) => api("api/settings", "POST", { self_learning: e.target.checked });
+$("setSelfAuto").onchange = (e) => api("api/settings", "POST", { self_learning_auto: e.target.checked });
+$("btnTestReject").onclick = () => api("api/io/test-reject", "POST");
+$("btnCalStart").onclick = () => api("api/calibration/start", "POST", { cols: +$("calCols").value, rows: +$("calRows").value, square_mm: +$("calSq").value });
+$("btnCalCapture").onclick = async () => {
+  try { await api("api/calibration/capture", "POST"); } finally { $("calPreview").src = "api/calibration/preview.jpg?" + Date.now(); $("calPreview").classList.remove("hidden"); }
+};
+$("btnCalCompute").onclick = async () => { await api("api/calibration/compute", "POST"); $("calPreview").classList.add("hidden"); toast("Calibration saved – retrain your models", "ok"); };
+$("btnCalCancel").onclick = () => { api("api/calibration/cancel", "POST"); $("calPreview").classList.add("hidden"); };
+$("btnCalDelete").onclick = () => confirm("Delete the calibration? Dimensions will be in pixels again.") && api("api/calibration", "DELETE");
+$("btnBoardShow").onclick = () => api("api/sim", "POST", { board: true });
+$("btnBoardHide").onclick = () => api("api/sim", "POST", { board: false });
 $("simLight").onchange = (e) => api("api/sim", "POST", { lighting: e.target.value });
 $("simPart").onchange = (e) => api("api/sim", "POST", { part_type: e.target.value });
 $("simAngle").onchange = (e) => api("api/sim", "POST", { any_angle: e.target.value === "1" });
 $("simRate").oninput = (e) => $("simRateVal").textContent = Math.round(e.target.value * 100) + " %";
 $("simRate").onchange = (e) => api("api/sim", "POST", { defect_rate: +e.target.value });
 
-async function poll() {
-  try { render(await (await fetch("api/status")).json()); } catch (e) { $("mode").textContent = "offline"; }
-  setTimeout(poll, 700);
+// ======================================================== operator view
+let view = "simple", wiz = null, sSel = null, sShown = null, sLastId = null, sModelsKey = "";
+
+function setView(v) {
+  view = v;
+  $("simple").classList.toggle("hidden", v !== "simple");
+  $("expert").classList.toggle("hidden", v !== "expert");
+  const on = v === "simple" ? $("sLive") : $("live"), off = v === "simple" ? $("live") : $("sLive");
+  off.removeAttribute("src"); on.src = "stream.mjpg?" + Date.now();       // only one camera stream at a time
+  if (v === "simple") {
+    if (setupToken) fetch("api/setup/lock", { method: "POST", headers: { "X-Setup-Token": setupToken, "X-QC-Token": token } });
+    setupToken = ""; try { sessionStorage.removeItem("qc-setup"); } catch (e) {}
+  }
+}
+$("btnOperator").onclick = () => setView("simple");
+$("sLock").onclick = async () => {
+  const c = await (await fetch("api/setup/check", { headers: { "X-Setup-Token": setupToken } })).json();
+  if (c.unlocked) { if (c.pin_required === false) setupToken = ""; setView("expert"); return; }
+  $("pinInput").value = ""; $("pinModal").classList.remove("hidden"); $("pinInput").focus();
+};
+$("pinCancel").onclick = () => $("pinModal").classList.add("hidden");
+$("pinInput").onkeydown = (e) => { if (e.key === "Enter") $("pinOk").click(); };
+$("pinOk").onclick = async () => {
+  const r = await api("api/setup/unlock", "POST", { pin: $("pinInput").value }).catch(() => null);
+  if (!r) return;
+  setupToken = r.token; try { sessionStorage.setItem("qc-setup", r.token); } catch (e) {}
+  $("pinModal").classList.add("hidden"); setView("expert");
+};
+
+async function sLoadModels(s) {
+  const models = await (await fetch("api/models")).json();
+  const active = s.model?.slug;
+  $("sModel").innerHTML = models.length
+    ? (active ? "" : `<option value="">– select part –</option>`) +
+      models.map((m) => `<option value="${m.slug}" ${m.slug === active ? "selected" : ""}>${esc(m.name)}</option>`).join("")
+    : `<option value="">– no part taught in yet –</option>`;
+  window._sModels = models;
+}
+$("sModel").onchange = async (e) => { if (e.target.value) { await api(`api/models/${e.target.value}/select`, "POST"); sModelsKey = ""; } };
+
+function sShow(r) {
+  sShown = r;
+  const big = $("sBig");
+  if (!r) { big.className = "big"; big.innerHTML = `–<small>${status?.mode === "inspecting" ? "Waiting for the next part" : "Press Start to begin"}</small>`;
+            $("sWhy").innerHTML = ""; $("sLastWrap").classList.add("hidden"); $("sWrongRow").classList.add("hidden"); return; }
+  const txt = r.status === "NO_PART" ? "NO PART" : r.status;
+  big.className = "big " + r.status;
+  big.innerHTML = `${txt}<small>${esc(r.model)} · ${r.timestamp.slice(11, 19)}${r.selftest ? " · reference check" : ""}</small>`;
+  $("sWhy").innerHTML = plainDefects(r.defects).map((t) => `<li><b>${esc(t)}</b></li>`).join("");
+  $("sLastWrap").classList.toggle("hidden", !(r.channels || []).length);
+  if ((r.channels || []).length) $("sLast").src = `api/results/${r.image_id}/0/overlay.jpg`;
+  const canFb = (r.status === "OK" || r.status === "NOK") && !r.selftest;
+  $("sWrongRow").classList.toggle("hidden", !canFb);
+  if (canFb) {
+    $("sWrong").textContent = r.status === "NOK" ? "Part is actually GOOD" : "Part is actually DEFECTIVE";
+    $("sWrong").disabled = r.feedback === "false_alarm" || r.feedback === "missed";
+    $("sWrongState").textContent = r.feedback === "false_alarm" || r.feedback === "missed" ? "✓ noted – thank you" : "";
+  }
+}
+$("sWrong").onclick = async () => {
+  const r = sShown; if (!r) return;
+  const q = r.status === "NOK" ? "This part was rated NOK but is GOOD?\nIt will be used to improve the model."
+                               : "This part was rated OK but is DEFECTIVE?\nTake it out of the good parts.";
+  if (!confirm(q)) return;
+  const res = await api(`api/results/${r.image_id}/feedback`, "POST",
+                        { verdict: r.status === "NOK" ? "ok" : "nok", add_reference: r.status === "NOK" });
+  r.feedback = res.outcome; sShow(r); toast("Noted – thank you", "ok");
+};
+
+// defects in plain words for the supervisor (grouped, no scores/thresholds)
+const PLAIN = { MISSING_HOLE: "Hole missing", BLIND_HOLE: "Hole not drilled through", HOLE_POSITION: "Hole in the wrong place",
+  HOLE_SHAPE: "Hole has the wrong shape", EXTRA_HOLE: "Extra hole or cut-out", OUTLINE: "Outline / edge damaged",
+  SURFACE: "Surface defect (scratch, dent, stain)", ANOMALY: "Surface defect (scratch, dent, stain)" };
+function plainDefects(defects) {
+  const n = new Map();
+  for (const d of defects) {
+    let t = PLAIN[d.kind] || d.label;
+    if (d.kind === "HOLE_DIAMETER") t = /\(\s*-/.test(d.detail) ? "Hole too small" : /\(\s*\+/.test(d.detail) ? "Hole too big" : "Wrong hole size";
+    n.set(t, (n.get(t) || 0) + 1);
+  }
+  return [...n].map(([t, k]) => k > 1 && !t.startsWith("Surface") ? `${t} (×${k})` : t);
 }
 
+async function sDots() {
+  const h = await (await fetch("api/results")).json();
+  window._sHist = h;
+  $("sDots").innerHTML = h.slice(0, 24).map((r, i) => `<i class="${r.status} ${sSel && sSel.image_id === r.image_id ? "sel" : ""}"
+     data-i="${i}" title="${r.timestamp.slice(11, 19)} ${r.status}"></i>`).join("");
+}
+$("sDots").onclick = (e) => {
+  const i = e.target.dataset?.i; if (i === undefined) return;
+  sSel = window._sHist[+i]; sShow(sSel); sDots();
+  clearTimeout(window._sSelT); window._sSelT = setTimeout(() => { sSel = null; sShow(status?.last_result); sDots(); }, 20000);
+};
+
+$("sStart").onclick = async () => {
+  if (status.mode === "inspecting" || status.mode === "selftest") return api("api/inspect/stop", "POST");
+  const slug = $("sModel").value;
+  if (!slug) return toast("Select a part first (or teach in a new one).");
+  await api("api/inspect/start", "POST", { model: slug });
+};
+$("sCapture").onclick = () => api("api/capture", "POST");
+$("sCheck").onclick = async () => {
+  if (!status.model) return toast("Select a part first.");
+  if (status.mode === "inspecting") await api("api/inspect/stop", "POST");
+  api("api/selftest/start", "POST");
+};
+$("sBatch").onclick = async () => {
+  const parts = status.counts.OK + status.counts.NOK;
+  const label = prompt(`Finish batch?\n${parts} part(s) will be saved as a ZIP file and the counters reset.\n\nBatch name:`,
+                       status.model?.name || "batch");
+  if (label === null) return;
+  if (status.mode === "inspecting" || status.mode === "selftest") await api("api/inspect/stop", "POST");
+  const r = await api("api/archives", "POST", { label });
+  sSel = null; sShow(null); sDots(); lastImageId = null; toast(`Batch saved: ${r.file}`, "ok");
+};
+
+// ---- teach-in wizard (right panel)
+$("sTeach").onclick = async () => {
+  if (status.mode === "inspecting") {
+    if (!confirm("The inspection will be stopped to teach in a new part. Continue?")) return;
+    await api("api/inspect/stop", "POST");
+  }
+  wiz = { step: "name" }; renderWiz(status);
+};
+function renderWiz(s) {
+  const el = $("sWiz");
+  // keep the wizard in sync with the machine state (e.g. after a page reload)
+  if (s.mode === "learning" && (!wiz || wiz.step === "name")) wiz = { step: "feed", name: s.learning.name };
+  if (s.mode === "training" && wiz?.step !== "train") wiz = { step: "train", name: s.learning.name || wiz?.name, seen: true };
+  if (wiz?.step === "train" && s.mode === "learning") wiz = { step: "feed", name: wiz.name, failed: true, seen: true };
+  if (wiz && ["learning", "training"].includes(s.mode)) wiz.seen = true;
+  if (wiz?.seen && ["train", "feed"].includes(wiz.step) && s.mode === "idle")      // finished (or cancelled elsewhere)
+    wiz = s.model && s.model.name === wiz.name && !s.learning.count ? { step: "done", name: wiz.name } : null;
+  const on = !!wiz;
+  $("sRun").classList.toggle("hidden", on); el.classList.toggle("hidden", !on);
+  if (!on) { el.dataset.step = ""; return; }
+  const L = s.learning;
+  if (wiz.step === "name" && !el.dataset.step?.startsWith("name")) {
+    el.innerHTML = `<h2>Teach in a new part – step 1 of 2</h2>
+      <p>Enter a name for the part:</p>
+      <input type="text" id="wName" placeholder="e.g. triangle plate 3 holes" autocomplete="off">
+      <p class="s-note">Then only <b>good</b> parts go over the conveyor – no defective ones.</p>
+      <div class="bigbtns"><button id="wCancel">Cancel</button><button class="go" id="wNext">Next →</button></div>`;
+    $("wName").focus();
+    $("wName").onkeydown = (e) => { if (e.key === "Enter") $("wNext").click(); };
+    $("wCancel").onclick = () => { wiz = null; el.dataset.step = ""; renderWiz(status); };
+    $("wNext").onclick = async () => {
+      const name = $("wName").value.trim();
+      if (!name) return toast("Please enter a name.");
+      if ((window._sModels || []).some((m) => m.name.toLowerCase() === name.toLowerCase()) &&
+          !confirm(`A part called “${name}” already exists. Replace it?`)) return;
+      await api("api/learn/start", "POST", { name, auto_finish: true });
+      wiz = { step: "feed", name }; renderWiz(status);
+    };
+  } else if (wiz.step === "feed") {
+    const pct = Math.min(100, 100 * L.count / L.target);
+    if (el.dataset.step !== "feed") {
+      el.innerHTML = `<h2>Teach in “${esc(wiz.name)}” – step 2 of 2</h2>
+        <div id="wFailed" class="notices"></div>
+        <p>Now run <b>${L.target} good parts</b> over the conveyor, each one placed a bit differently.
+           Every part is captured automatically in the middle of the picture.</p>
+        <div class="count" id="wCount"></div>
+        <div class="progress"><i id="wBar"></i></div>
+        <div class="thumbs" id="wThumbs" title="Tap a picture to remove it (e.g. a defective part slipped in)"></div>
+        <p class="s-note">The model is created automatically after ${L.target} parts. Wrong part captured? Tap its picture to remove it.</p>
+        <div class="bigbtns"><button id="wCancel">Cancel</button><button id="wFinish">Finish now</button></div>`;
+      $("wCancel").onclick = async () => { if (confirm("Cancel teaching in? The captured pictures are lost.")) { await api("api/learn/cancel", "POST"); wiz = null; renderWiz(status); } };
+      $("wFinish").onclick = () => api("api/learn/finish", "POST", {});
+      $("wThumbs").onclick = (e) => { if (e.target.dataset.i !== undefined) api("api/learn/undo", "POST", { index: +e.target.dataset.i }).then(() => $("wThumbs").innerHTML = ""); };
+    }
+    const err = (s.messages.find((m) => m.level === "error") || {}).text || "";
+    $("wFailed").innerHTML = wiz.failed ? `<div class="error">Creating the model failed: ${esc(err)}<br>Run more good parts and press “Finish now”, or cancel.</div>` : "";
+    $("wCount").innerHTML = `${L.count} <span>/ ${L.target}</span>`;
+    $("wBar").style.width = pct + "%";
+    $("wFinish").disabled = L.count < L.minimum || s.mode !== "learning";
+    $("wFinish").textContent = L.count < L.minimum ? `Finish now (min. ${L.minimum})` : "Finish now";
+    const th = $("wThumbs");
+    if (th.children.length !== L.count)
+      th.innerHTML = Array.from({ length: L.count }, (_, i) => `<img src="api/learn/thumb/${i}.jpg?v=${L.count}" data-i="${i}">`).join("");
+  } else if (wiz.step === "train" && el.dataset.step !== "train") {
+    el.innerHTML = `<h2>Creating the model …</h2><p>Please wait a moment.</p><div class="progress"><i style="width:100%"></i></div>`;
+  } else if (wiz.step === "done" && el.dataset.step !== "done") {
+    el.innerHTML = `<div class="big OK" style="font-size:40px">✓ READY<small>“${esc(wiz.name)}” has been taught in</small></div>
+      <p>Tip: check it once with a known good and a known defective part (“Reference part check”).</p>
+      <div class="bigbtns"><button class="go wide" id="wGo">▶ Start inspection</button><button class="wide" id="wClose">Close</button></div>`;
+    $("wGo").onclick = async () => { await api("api/inspect/start", "POST", {}); wiz = null; sModelsKey = ""; renderWiz(status); };
+    $("wClose").onclick = () => { wiz = null; sModelsKey = ""; renderWiz(status); };
+  }
+  el.dataset.step = wiz.step;
+}
+
+function renderSimple(s) {
+  const busy = { learning: "Teaching in", training: "Creating model", selftest: "Reference check" }[s.mode];
+  $("sState").textContent = s.mode === "inspecting" ? "● Inspection running" : busy || "Stopped";
+  $("sState").className = "s-state " + (s.mode === "inspecting" ? "run" : busy ? "busy" : "");
+  const notes = [...(s.notices || [])];
+  if (s.mode === "selftest" && s.selftest.active)
+    notes.unshift({ level: "warn", text: s.selftest.active.step === "good" ? "Reference check 1/2: put the known GOOD reference part on the conveyor."
+                                                                             : "Reference check 2/2: put the known DEFECTIVE reference part on the conveyor." });
+  $("sNotices").innerHTML = notes.map((n) => `<div class="${n.level}">${n.level === "info" ? "ℹ" : "⚠"} ${esc(n.text)}</div>`).join("");
+  $("sModel").disabled = s.mode !== "idle";
+  const running = s.mode === "inspecting" || s.mode === "selftest";
+  $("sStart").textContent = running ? (s.mode === "selftest" ? "■ Cancel reference check" : "■ Stop inspection") : "▶ Start inspection";
+  $("sStart").className = (running ? "stop" : "go") + " wide";
+  $("sStart").disabled = !running && (s.mode !== "idle" || !s.model);
+  $("sTeach").disabled = !["idle", "inspecting"].includes(s.mode);
+  $("sCheck").disabled = s.mode !== "idle" && s.mode !== "inspecting" || !s.model;
+  $("sBatch").disabled = ["training", "learning"].includes(s.mode) || !(s.counts.OK + s.counts.NOK);
+  const active = ["learning", "inspecting", "selftest"].includes(s.mode);
+  $("sCapture").classList.toggle("hidden", !active);
+  $("sTrig").textContent = !active ? "" : s.continuous ? (s.armed ? "Waiting for the next part …" : "Part captured") : "";
+  const c = s.counts, total = c.OK + c.NOK;
+  $("sOK").textContent = c.OK; $("sNOK").textContent = c.NOK;
+  $("sRate").textContent = total ? `${(100 * c.NOK / total).toFixed(1)} %` : "–";
+  const m = s.model, st = s.settings;
+  $("sLearnInfo").textContent = !m || !st.self_learning ? "" : s.self_learning_running ? "⟳ The model is improving itself right now – inspection continues."
+    : st.self_learning_auto ? `The model improves itself with good parts (${m.collected}/${st.self_learning_every} collected).` : "";
+  const key = (m?.slug || "") + s.mode + (m?.learned ?? "");
+  if (key !== sModelsKey) { sModelsKey = key; sLoadModels(s); }
+  if (s.last_result && s.last_result.image_id !== sLastId) {
+    sLastId = s.last_result.image_id; if (!sSel) sShow(s.last_result); sDots();
+  } else if (!s.last_result && sLastId !== null) { sLastId = null; sSel = null; sShow(null); sDots(); }
+  else if (!s.last_result && !sShown) sShow(null);
+  renderWiz(s);
+}
+
+async function poll() {
+  try {
+    const s = await (await fetch("api/status")).json();
+    render(s); renderSimple(s);
+  } catch (e) { console.error(e); $("mode").textContent = "offline"; $("sState").textContent = "offline"; }
+  setTimeout(poll, 700);
+}
 (async () => {
   opts = await (await fetch("api/options")).json();
   methodSettings();
+  let unlocked = false;
+  if (setupToken) unlocked = (await (await fetch("api/setup/check", { headers: { "X-Setup-Token": setupToken } })).json()).unlocked;
+  setView(unlocked ? "expert" : "simple");
   poll();
 })();
 </script>

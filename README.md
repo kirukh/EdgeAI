@@ -6,7 +6,25 @@ predefined defect categories. It inspects with a combination of classical image 
 reference image comparison and unsupervised machine learning. For NOK parts, the defect location is
 marked in the image.
 
-![User interface](docs/screenshot_ui.png)
+![Operator screen](docs/screenshot_operator.png)
+
+## Two levels of operation
+
+| | Who | What |
+|---|---|---|
+| **Operator screen** (default, no PIN) | Supervisor at the conveyor | Select part · Start/Stop · big OK/NOK with the defect in plain words · *Teach in new part* (2-step assistant) · *Finish batch* (ZIP + reset) · *Reference part check* · “Result wrong?” button |
+| **Setup area** (🔒 Setup, PIN) | Setup technician | Methods, sensitivity, calibration, lighting mode, shots per part, GPIO, drift values, model management, archives, simulator |
+
+The PIN is set in `config.json → "ui": {"setup_pin": "1234"}` – **change it**. `""` = no PIN. The PIN is checked
+on the server (not only hidden in the page); after 5 wrong entries input is blocked for 60 s, and the setup area
+locks itself after 30 min without activity (`setup_timeout_min`) or with *← Operator view · lock*.
+
+What the supervisor does **not** need to do any more:
+- choose methods when teaching in (the defaults from `config.json` are used),
+- click *Finish* when teaching in – the model is created automatically after `target_reference_count` parts,
+- train collected good parts in – this runs automatically in the background (see *Self-learning*),
+- read scores, thresholds or drift tables – the operator screen only shows plain hints such as
+  “The image is getting blurry. Clean the camera lens and check the focus.”
 
 ## Quick start (no hardware)
 
@@ -16,16 +34,22 @@ pip install -r requirements.txt
 python main.py web            # → http://localhost:8000
 ```
 
-The simulator generates a conveyor with synthetic plates. You can set the lighting
-(front light/backlight), the part type (A = plate with 2 holes, B = hole + slot, C = triangle with 3 holes,
-D = square with 4 holes), the rotation on the belt (roughly aligned or any angle) and the defect rate. Workflow in the UI:
+The simulator generates a conveyor with synthetic plates (simulator settings: setup area → Setup tab).
+Workflow on the operator screen:
 
-1. **Learning mode**: enter a name, then *Start*. Each part is captured automatically when it passes the
-   centre of the image. In learning mode the simulator only sends good parts. Click a thumbnail to
-   remove a bad capture.
-2. **Finish & create model**. Before that you can optionally choose the methods and image representation.
-3. **Inspection mode**: select a model, then *Start*. Results, marked defect locations, per-method scores and
-   the history appear live. In the simulator the expected class is shown for comparison.
+1. **＋ Teach in new part** → enter a name → *Next*. Run the good parts over the conveyor; each one is captured
+   automatically in the middle of the picture (tap a thumbnail to remove a wrong capture). After 15 parts the
+   model is created by itself (*Finish now* is possible from 3 parts).
+2. **▶ Start inspection**. The result appears big (OK/NOK); for NOK the defect is named in plain words and marked
+   in the picture of the last part. Wrong result? → *Part is actually GOOD / DEFECTIVE*.
+3. **✓ Finish batch** at the end: all results are saved as a ZIP file, counters reset.
+
+The setup area (PIN, default `1234`) contains the full technical interface with three tabs: **Operation**
+(statistics, history with scores, self-test, learning with method choice, archive list, messages), **Models**
+(method settings, sensitivity, retraining, self-learning status) and **Setup** (lighting mode, shots per part,
+self-learning, camera calibration, drift monitor, GPIO outputs, simulator).
+
+![Setup area](docs/screenshot_ui.png)
 
 ## Inspection pipeline
 
@@ -38,11 +62,14 @@ Camera image
   → Photometric normalisation: background = 0, part = 1
   → Image representation per method: gray, CLAHE, edges, threshold,
     LAB, HSV …                                                          (representations.py)
-  → Inspection methods (combined with OR)                               (methods.py)
-       geometry  holes + outline vs. learned nominal geometry
+  → Inspection methods                                                   (methods.py)
+       geometry  holes + outline vs. learned nominal geometry (sub-pixel)
        diff      z-score difference map vs. mean/spread image of the good parts
        pca       ML: PCA subspace of the good parts, reconstruction error = anomaly
+  → Decision: fusion of the methods, × sensitivity per method           (model.py)
+  → optional: several shots per part → majority vote                    (system.py)
   → OK / NOK + defect type + marking in the original image             (visualize.py)
+  → log, lamps, delayed reject pulse, drift monitor                     (system.py, io_control.py, drift.py)
 ```
 
 | Defect | Detected by | Reported as |
@@ -61,6 +88,73 @@ max(minimum tolerance, k·σ). For `diff` and `pca`, leave-one-out measures how 
 from the others, and the threshold is set above that with a safety margin. After learning, the system
 inspects its own references. It warns if one of them stands out, which usually means a defective part was
 taught in by mistake.
+
+## Improving detection – features
+
+| Feature | Where | What it does |
+|---|---|---|
+| **Fusion decision** | `method.decision` | A method decides alone only above its stand-alone level (geometry/diff 1.0, ML 1.5); weaker findings need a second method to agree. Synthetic test: false alarms 0.75 % → 0 %, detection 94.5 % → 93.8 %. `"or"` restores the old behaviour. |
+| **Sensitivity per method** | Models tab | Slider ×0.5 … ×2 per method and model (> 1 = stricter). Takes effect immediately, no retraining. |
+| **Sub-pixel hole measurement** | automatic | Holes are cut at the exact 50 % level on a 4× upsampled patch. Measurement error for known shifts 0.03 px instead of 0.2 px. The fine alignment uses the part outline as datum, so a displaced hole cannot hide its own offset. |
+| **Supervisor feedback** | result card | “Correct” / “Was OK – false alarm” / “Was NOK – missed defect”. Gives the real hit rate (statistics + archive summary). False alarms can be queued as extra references → *Retrain (+N feedback ref.)*. |
+| **Multiple shots per part** | Setup tab | 3 or 5 images while the part passes, majority vote → random false alarms (dust, reflections) disappear. |
+| **Dual light** | Setup tab + `io` pins | Per part one backlight image (exact silhouette → holes/outline) and one front-light image (surface, blind holes). Separate model per light, results merged (“not drilled through” from front light replaces “missing” from backlight). |
+| **Camera calibration** | Setup tab / `calibrate` | Checkerboard → mm/px, optional lens-distortion correction. Dimensions and tolerances in mm (`pos_tol_mm`, `dia_tol_mm`). Unreliable distortion estimates (board not tilted enough) are rejected automatically. |
+| **Drift monitor** | Setup tab, header | Contrast, background, part size and edge sharpness vs. the learning phase; warning if lighting, camera distance or focus change. |
+| **Self-test** | Operation tab | Reference part check at shift start: known good part must be OK, known bad part NOK. Logged, shown in the header, included in the archive. |
+| **GPIO outputs** | `io` in config.json | Reject pulse with travel-time delay (counted from the capture), OK/NOK lamps, light switching. Runs simulated without a Pi. |
+| **Self-learning** | automatic (Setup tab to switch off) | Clear good parts are collected and trained in automatically every 30 parts, with safety checks (see below). |
+| **Rotation search mode** | `localization.rotation_search` | `full` (any rotation), `flip` (0°/180°, mechanically guided parts), `off`. |
+| **Benchmark** | `main.py benchmark` | Time per processing step on the target hardware. |
+
+### Self-learning: the model improves with every batch
+
+More good references make the statistical methods sharper (synthetic test: 10 → 30 references, detection
+97.5 % → 100 %, ML threshold halved). But blindly adding every part rated OK is dangerous: in the same test,
+**3 slightly defective parts among 60 references loosened the ML threshold five-fold and the detection of
+small hole offsets dropped from 100 % to 80 %** – the model learns the defect as "normal", and slow process
+drift (e.g. a blunt drill) would be learned away. Therefore:
+
+1. **Collect only clear good parts** (automatic, Setup tab switch): every method must be below 50 % of its
+   threshold, all shots OK, no drift warning active. Reservoir sampling keeps max. 100 parts per model, spread
+   evenly over the whole production period.
+2. **Train in automatically in the background** every `self_learning.auto_every` (30) collected parts. Inspection
+   keeps running with the old model; collecting pauses meanwhile; the new model replaces the old one only when
+   all checks pass. A rejected pool is discarded (it is not retried) and the operator screen shows a hint.
+   `"auto": false` = only manually via the button in the Models tab (inspection stopped).
+3. **Taught-in parts stay the anchor**: nominal dimensions, geometry tolerances, alignment reference and drift
+   baseline are learned only from the taught-in (and supervisor-confirmed) references. Collected parts only
+   refine the reference comparison and the ML method. Max. 80 references in total.
+4. **Safety checks before the new model is used** – otherwise it is rejected and the old model stays active:
+   * no statistical threshold may loosen by more than 30 % (more good parts normally make them tighter);
+   * every *known defective part* that the current model detects must still be detected. Known defective parts
+     are collected automatically from the self-test (bad part) and from supervisor feedback (“✓ Correct” on a NOK
+     result, “Was NOK – missed defect”).
+5. **Supervisor feedback “Part is actually DEFECTIVE”** on a collected part removes it from the pool (if that
+   happens while the pool is being trained in, the update is cancelled). “Part is actually GOOD” on a false
+   alarm queues the part as an additional reference; it becomes an anchor with the next (automatic) update.
+
+Test: a clean pool of 45 parts was accepted (ML threshold −25 %, nominal geometry unchanged); a pool with 3
+slightly defective parts was rejected by all three checks.
+
+### Configuration example for the Pi (`config.json`)
+
+```json
+{
+  "camera":      {"source": "pi", "exposure_us": 3000},
+  "lighting":    {"mode": "dual", "idle_light": "front"},
+  "inspection":  {"shots_per_part": 1},
+  "io":          {"enabled": true, "reject_pin": 17, "reject_delay_ms": 600, "reject_pulse_ms": 150,
+                  "ok_lamp_pin": 22, "nok_lamp_pin": 27, "front_light_pin": 23, "back_light_pin": 24},
+  "method":      {"pos_tol_mm": 0.3, "dia_tol_mm": 0.15},
+  "calibration": {"board_cols": 9, "board_rows": 6, "square_mm": 10.0},
+  "self_learning": {"auto": true, "auto_every": 30},
+  "ui":          {"setup_pin": "4711"}
+}
+```
+
+GPIO numbers are BCM numbers. Drive valves, relays and LED strips via a driver board (MOSFET/relay module),
+never directly from a pin. Measure `reject_delay_ms` on the real conveyor (camera → ejector travel time).
 
 ## Evaluation: which combination works?
 
@@ -179,6 +273,12 @@ To start automatically at boot, use `deploy/qc.service` (instructions inside the
 balance are preset on purpose. Automatic settings would change the brightness from part to part and
 disturb the reference comparisons.
 
+**Focus (Camera Module 3 / autofocus cameras):** With `"lens_position": null` (default) the camera runs
+one autofocus cycle at start-up and then locks the focus. For reproducible results set a fixed value in
+dioptres, e.g. `"lens_position": 3.3` (≈ 30 cm working distance; value = 100 / distance in cm). The focus
+used is written to the log at start-up. Cameras without autofocus (HQ, Global Shutter) ignore the setting;
+focus them manually on the lens.
+
 **Run time:** On an x86 laptop an inspection takes about 60–90 ms (including the 360° rotation search),
 and training takes about 2–3 s
 (15 images, 1280×960). This has not been measured on the Pi; expect several times that. The main tuning knob
@@ -194,15 +294,22 @@ against path traversal.
 python main.py train   --name PlateA --images photos/good/ [--methods geometry,diff --diff-rep clahe]
 python main.py inspect --model PlateA photos/new/*.png --out results/
 python main.py generate --out data/synth --lighting back --part-type B
-python -m pytest -q                        # 18 tests, incl. the complete web workflow with the simulator
+python main.py board --out board.pdf --cols 9 --rows 6 --square 10      # printable checkerboard (A4, 100 %)
+python main.py calibrate --images calib/ --cols 9 --rows 6 --square 10   # 1st image: board flat on the belt
+python main.py benchmark                   # time per step – run this on the Pi
+python -m pytest -q                        # 40 tests, incl. complete web workflows with the simulator
 ```
 
 ## Data storage
 
 ```
-data/models/<name>/     meta.json (settings, training report), arrays.npz, refs/*.png
-data/results/<date>/    inspection_log.csv (all inspections), NOK images (marked + original)
+data/models/<name>/     recipe.json (channels, sensitivity)
+                        channels/<main|back|front>/  meta.json, arrays.npz,
+                            refs/ (taught-in anchors), learned/ (self-learned), collected/ (pool),
+                            pending/ (feedback), known_bad/ (safety check)
+data/results/<date>/    inspection_log.csv, feedback_log.csv, selftest_log.csv, NOK images (marked + original)
 data/archive/*.zip      archived batches
+data/calibration.json   camera calibration
 ```
 
 ### Archiving a finished batch
@@ -224,15 +331,19 @@ methods or image representations (button in the UI). This is handy for compariso
 ## Project structure
 
 ```
-main.py                  command line (web, train, inspect, generate, evaluate)
+main.py                  command line (web, train, inspect, archive, board, calibrate, benchmark, generate, evaluate)
 qc/config.py             all parameters (dataclasses, overridable via config.json)
 qc/camera.py             Pi camera, USB, image folder, simulator
 qc/alignment.py          localisation, alignment, photometric normalisation
 qc/representations.py    image representations (gray, CLAHE, edges, threshold, LAB, HSV …)
 qc/methods.py            inspection methods geometry / diff / pca
-qc/model.py              learning, inspection, save/load, retraining
+qc/model.py              one channel: learning, inspection, fusion decision, drift measurements
+qc/recipe.py             part type = 1 or 2 channels (single/dual light), sensitivity, feedback refs, retraining
 qc/visualize.py          defect location marking, heatmap
-qc/system.py             process control, conveyor trigger, log
+qc/system.py             process control, trigger, multi-shot, dual capture, feedback, self-test, log
+qc/calibration.py        checkerboard calibration, undistortion, mm/px
+qc/drift.py              image-quality drift monitor
+qc/io_control.py         GPIO: reject, lamps, lighting (simulated without a Pi)
 qc/webapp.py + static/   supervisor UI (Flask, no external dependencies)
 qc/synthetic.py          synthetic parts with defects
 qc/evaluate.py           comparison of method × representation × lighting
@@ -243,9 +354,8 @@ tests/                   pytest
 ## Open points / extensions
 
 - **Real images**: fine-tune the thresholds (`method` section of the configuration) on real parts.
-- **Handling of NOK parts** (reject via GPIO/PLC): the hook is `QCSystem._inspect`.
-- **Dimensions in mm**: everything is currently in pixels. A calibration (scale in px/mm) would allow direct
-  conversion.
+- **Hardware not yet tested**: GPIO outputs, light switching and the Pi camera are implemented but only
+  tested simulated. Check the timing of the light switching (`lighting.settle_frames`) on the real camera.
 - **Stronger ML**: pretrained features (e.g. MobileNet via TFLite) plus PatchCore-style nearest-neighbour
   comparison could be added as another method in `methods.py`.
-- **Combined lighting**, front light and backlight (see evaluation).
+- **PLC connection** instead of/in addition to GPIO (e.g. Modbus TCP): hook in `QCSystem._inspect`.

@@ -24,6 +24,7 @@ class CameraSource:
     """Base class: ``read()`` returns the next BGR image (or ``None``)."""
 
     name = "base"
+    info = ""
     # Sources with real parts moving on a conveyor → the trigger decides when to capture
     continuous = True
 
@@ -57,6 +58,19 @@ class PiCameraSource(CameraSource):
             self.cam.set_controls(controls)
         self.cam.start()
         time.sleep(0.5)
+        self.info = ""
+        if "AfMode" in self.cam.camera_controls:        # camera with autofocus (e.g. Camera Module 3)
+            try:
+                if cfg.lens_position is None:
+                    self.cam.set_controls({"AfMode": 1})         # auto: one focus run, then the lens stays
+                    self.cam.autofocus_cycle()
+                else:
+                    self.cam.set_controls({"AfMode": 0, "LensPosition": float(cfg.lens_position)})   # manual
+                    time.sleep(0.3)
+                pos = self.cam.capture_metadata().get("LensPosition")
+                self.info = f"focus fixed at {pos:.2f} dioptres (≈ {100 / pos:.0f} cm)" if pos else ""
+            except Exception as e:  # noqa: BLE001 - focus problems must not stop the system
+                self.info = f"focus could not be set: {e}"
 
     def read(self):
         # picamera2 "RGB888" delivers BGR byte order – matches OpenCV directly
@@ -126,9 +140,14 @@ class FolderSource(CameraSource):
 
 
 class SimulatorSource(CameraSource):
-    """Simulated conveyor: parts move through the image from left to right."""
+    """Simulated conveyor: parts move through the image from left to right.
+
+    Also simulates switchable lighting (front light/backlight, for dual-light mode)
+    and can show a checkerboard for testing the camera calibration.
+    """
 
     name = "Simulator"
+    MM_PER_PX = 0.25          # simulated scale at 640 px image width (plate A ≈ 75 × 42 mm)
 
     def __init__(self, cfg: CameraConfig, seed: int | None = None):
         from . import synthetic
@@ -137,20 +156,27 @@ class SimulatorSource(CameraSource):
         self.cfg = cfg
         self.rng = np.random.default_rng(seed)
         self.size = (min(cfg.width, 960), int(min(cfg.width, 960) * cfg.height / cfg.width))
-        self.background = synthetic.belt_background(self.size, cfg.sim_lighting, self.rng)
+        self.light = cfg.sim_lighting             # lighting currently switched on
+        self._backgrounds: dict[str, np.ndarray] = {}
         self.part_type = cfg.sim_part_type
         self.defect_rate = cfg.sim_defect_rate
         self.force_good = False
+        self.force_defect = False                 # self-test: next parts are defective
+        self.board: dict | None = None            # checkerboard for calibration tests
         self._spawn()
         self.last_time = 0.0
 
+    def _background(self, light: str) -> np.ndarray:
+        if light not in self._backgrounds:
+            self._backgrounds[light] = self.syn.belt_background(self.size, light, self.rng)
+        return self._backgrounds[light]
+
     def _spawn(self):
         defect = None
-        if not self.force_good and self.rng.random() < self.defect_rate:
+        if self.force_defect or (not self.force_good and self.rng.random() < self.defect_rate):
             defect = str(self.rng.choice(self.syn.DEFECTS))
         self.part = self.syn.make_part(self.part_type, defect, self.rng)
-        scale = self.size[0] / 640.0
-        self.layers = self.syn.render_layers(self.part, self.cfg.sim_lighting, scale)
+        self._layers: dict[str, tuple] = {}
         self.x = -200.0
         self.y = 240 + self.rng.uniform(-25, 25)
         if self.cfg.sim_any_angle:
@@ -159,14 +185,68 @@ class SimulatorSource(CameraSource):
             self.angle = self.rng.uniform(-6, 6) + (180 if self.rng.random() < 0.5 else 0)
         self.gap = self.rng.integers(0, 20)
 
+    def _layer(self, light: str):
+        if light not in self._layers:
+            self._layers[light] = self.syn.render_layers(self.part, light, self.size[0] / 640.0)
+        return self._layers[light]
+
     @property
     def current_defect(self) -> str | None:
         return self.part.defect
 
     def set_lighting(self, lighting: str):
+        """Simulator setting (UI): lighting used in single-light mode."""
         self.cfg.sim_lighting = lighting
-        self.background = self.syn.belt_background(self.size, lighting, self.rng)
+        self.light = lighting
         self._spawn()
+
+    def switch_light(self, light: str):
+        """Called by the light controller (dual-light mode): same part, other lighting."""
+        if light in ("front", "back"):
+            self.light = light
+
+    def show_board(self, cols: int = 9, rows: int = 6, square_mm: float = 10.0):
+        """Show a checkerboard at a new random pose (calibration test)."""
+        # 1st board lies flat on the belt; later ones are tilted (like a user would hold it)
+        tilt = 0.0 if self.board is None and not getattr(self, "_boards_shown", 0) else 0.22
+        self._boards_shown = getattr(self, "_boards_shown", 0) + 1
+        self.board = {"cols": cols, "rows": rows, "square_mm": square_mm, "seed": int(self.rng.integers(1 << 30)),
+                      "tilt": tilt}
+
+    def hide_board(self):
+        self.board = None
+
+    def _render_board(self) -> np.ndarray:
+        b = self.board
+        rng = np.random.default_rng(b["seed"])
+        scale = self.size[0] / 640.0
+        sq = b["square_mm"] / self.MM_PER_PX * scale
+        nx, ny = b["cols"] + 1, b["rows"] + 1
+        board = np.full((int(ny * sq) + 2, int(nx * sq) + 2), 255, np.uint8)
+        for j in range(ny):
+            for i in range(nx):
+                if (i + j) % 2 == 0:
+                    cv2.rectangle(board, (int(i * sq), int(j * sq)), (int((i + 1) * sq) - 1, int((j + 1) * sq) - 1), 0, -1)
+        h, w = board.shape
+        src = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
+        cx, cy = self.size[0] / 2 + rng.uniform(-30, 30) * scale, self.size[1] / 2 + rng.uniform(-20, 20) * scale
+        ang = np.radians(rng.uniform(-12, 12))
+        rot = np.array([[np.cos(ang), -np.sin(ang)], [np.sin(ang), np.cos(ang)]])
+        corners = (src - [w / 2, h / 2]) @ rot.T + [cx, cy]
+        # perspective of a tilted plane: one side nearer (larger) than the other
+        t = b.get("tilt", 0.0)
+        if t:
+            ax = rng.uniform(0, 2 * np.pi)
+            d = np.array([np.cos(ax), np.sin(ax)])
+            rel = corners - corners.mean(0)
+            k = (rel @ d) / (np.abs(rel @ d).max() + 1e-9)          # −1 … 1 along the tilt axis
+            corners = corners.mean(0) + rel * (1 + t * k)[:, None]
+        corners += rng.uniform(-2, 2, corners.shape) * scale
+        H = cv2.getPerspectiveTransform(src, corners.astype(np.float32))
+        img = cv2.warpPerspective(board, H, self.size, borderValue=90)
+        img = cv2.GaussianBlur(img, (0, 0), 0.7)
+        noise = self.rng.normal(0, 2, img.shape)
+        return cv2.cvtColor(np.clip(img + noise, 0, 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
 
     def read(self):
         # Limit the frame rate so the simulator does not max out the CPU
@@ -174,12 +254,14 @@ class SimulatorSource(CameraSource):
         if wait > 0:
             time.sleep(wait)
         self.last_time = time.time()
+        if self.board is not None:
+            return self._render_board()
         self.x += self.cfg.sim_speed_px
         if self.x > 840 + self.gap * self.cfg.sim_speed_px:
             self._spawn()
         return self.syn.compose(
-            self.part, (self.x, self.y, self.angle), self.cfg.sim_lighting,
-            self.size, self.rng, layers=self.layers, background=self.background,
+            self.part, (self.x, self.y, self.angle), self.light,
+            self.size, self.rng, layers=self._layer(self.light), background=self._background(self.light),
         )
 
 

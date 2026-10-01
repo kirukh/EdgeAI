@@ -11,8 +11,10 @@
       1.6,
       1.6
     ],
+    "lens_position": null,
     "sim_lighting": "front",
     "sim_part_type": "A",
+    "sim_any_angle": false,
     "sim_defect_rate": 0.3,
     "sim_speed_px": 14.0
   },
@@ -22,6 +24,9 @@
     "border_margin_px": 4,
     "canvas_margin_ratio": 0.12,
     "use_ecc_refine": true,
+    "ecc_datum": "auto",
+    "rotation_search": "full",
+    "allow_mirror": false,
     "work_width": 640
   },
   "trigger": {
@@ -45,6 +50,12 @@
     "rim_edge_threshold": 0.25,
     "shape_tol_ratio": 0.25,
     "outline_min_area_px": 80,
+    "pos_tol_mm": null,
+    "dia_tol_mm": null,
+    "decision": "fusion",
+    "geometry_standalone": 1.0,
+    "diff_standalone": 1.0,
+    "pca_standalone": 1.5,
     "diff_z_threshold": 6.0,
     "diff_sigma_floor": 0.04,
     "diff_blur": 5,
@@ -57,9 +68,61 @@
   "storage": {
     "models_dir": "data/models",
     "results_dir": "data/results",
+    "archive_dir": "data/archive",
     "save_ok_images": false,
     "save_nok_images": true,
     "history_size": 50
+  },
+  "lighting": {
+    "mode": "single",
+    "idle_light": "front",
+    "settle_frames": 2,
+    "back_methods": [
+      "geometry"
+    ],
+    "front_methods": null
+  },
+  "inspection": {
+    "shots_per_part": 1,
+    "tie_is_nok": true
+  },
+  "self_learning": {
+    "enabled": true,
+    "auto": true,
+    "auto_every": 30,
+    "margin": 0.5,
+    "max_pool": 100,
+    "max_references": 80,
+    "growth_limit": 0.3
+  },
+  "io": {
+    "enabled": false,
+    "active_high": true,
+    "reject_pin": null,
+    "reject_delay_ms": 500,
+    "reject_pulse_ms": 150,
+    "ok_lamp_pin": null,
+    "nok_lamp_pin": null,
+    "lamp_ms": 800,
+    "front_light_pin": null,
+    "back_light_pin": null
+  },
+  "drift": {
+    "window": 20,
+    "contrast_tol": 0.15,
+    "background_tol": 20.0,
+    "area_tol": 0.03,
+    "sharpness_tol": 0.25
+  },
+  "calibration": {
+    "file": "data/calibration.json",
+    "board_cols": 9,
+    "board_rows": 6,
+    "square_mm": 10.0
+  },
+  "ui": {
+    "setup_pin": "1234",
+    "setup_timeout_min": 30
   },
   "target_reference_count": 15
 }

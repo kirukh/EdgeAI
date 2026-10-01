@@ -44,8 +44,25 @@ def summarize(results_dir: str | Path) -> dict:
                     times.append(row["time"])
                 for d in filter(None, (row.get("defects") or "").split(" | ")):
                     defects[d.split(": ", 1)[0]] += 1
+    fb = Counter()
+    for log in sorted(Path(results_dir).rglob("feedback_log.csv")):
+        with log.open(newline="", encoding="utf-8") as f:
+            latest = {row["image_id"]: row["outcome"] for row in csv.DictReader(f)}   # last word counts
+        fb.update(latest.values())
+    selftests = []
+    for log in sorted(Path(results_dir).rglob("selftest_log.csv")):
+        with log.open(newline="", encoding="utf-8") as f:
+            selftests += [{"time": r["time"], "passed": r["passed"] == "PASS"} for r in csv.DictReader(f)]
     ok, nok = results.get("OK", 0), results.get("NOK", 0)
+    reviewed = sum(fb.values())
+    correct = fb.get("confirmed_ok", 0) + fb.get("confirmed_nok", 0)
     return {
+        "supervisor_feedback": {
+            "reviewed": reviewed, "false_alarms": fb.get("false_alarm", 0), "missed_defects": fb.get("missed", 0),
+            "confirmed": correct,
+            "accuracy_of_reviewed_percent": round(100.0 * correct / reviewed, 1) if reviewed else None,
+        },
+        "selftests": selftests,
         "inspected": ok + nok,
         "ok": ok,
         "nok": nok,
@@ -71,6 +88,15 @@ def _summary_text(label: str, s: dict) -> str:
         "Defect types:",
     ]
     lines += [f"  {k}: {v}" for k, v in s["defect_types"].items()] or ["  none"]
+    fb = s.get("supervisor_feedback", {})
+    if fb.get("reviewed"):
+        lines += ["", "Supervisor review:",
+                  f"  reviewed results: {fb['reviewed']}",
+                  f"  false alarms:     {fb['false_alarms']}",
+                  f"  missed defects:   {fb['missed_defects']}",
+                  f"  confirmed:        {fb['confirmed']}  ({fb['accuracy_of_reviewed_percent']} % of reviewed)"]
+    if s.get("selftests"):
+        lines += ["", "Self-tests:"] + [f"  {t['time']}: {'PASS' if t['passed'] else 'FAIL'}" for t in s["selftests"]]
     return "\n".join(lines) + "\n"
 
 

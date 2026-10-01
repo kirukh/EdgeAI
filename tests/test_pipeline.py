@@ -130,10 +130,13 @@ def test_web_flow(tmp_path):
         assert client.get("/").status_code == 200
         assert client.post("/api/learn/start", json={"name": "Plate A"}).json["ok"]
         wait(lambda: client.get("/api/status").json["learning"]["count"] >= 6)
-        assert client.post("/api/learn/finish", json={"methods": ["geometry", "diff"]}).json["ok"]
+        # method choice is a setup function → unlock with the PIN first
+        tok = client.post("/api/setup/unlock", json={"pin": cfg.ui.setup_pin}).json["token"]
+        assert client.post("/api/learn/finish", json={"methods": ["geometry", "diff"]},
+                           headers={"X-Setup-Token": tok}).json["ok"]
         wait(lambda: client.get("/api/status").json["mode"] == "idle")
         models = client.get("/api/models").json
-        assert models and models[0]["methods"] == ["geometry", "diff"]
+        assert models and models[0]["methods"] == {"main": ["geometry", "diff"]}
         assert client.post("/api/inspect/start", json={"model": models[0]["slug"]}).json["ok"]
         wait(lambda: len(client.get("/api/results").json) >= 4)
         client.post("/api/inspect/stop")
@@ -203,11 +206,13 @@ def test_archive_results(tmp_path):
     import cv2
     for i, f in enumerate(frames("A", "front", 3, rng) + frames("A", "front", 2, rng, "missing")):
         cv2.imwrite(str(img_dir / f"{i}.png"), f)
+    from qc.recipe import Recipe
+
     system = QCSystem(cfg, FolderSource(str(img_dir), loop=False))
-    system.model = QCModel.load(tmp_path / "models" / "Plate_A")
+    system.model = Recipe.load(tmp_path / "models" / "Plate_A")      # old single-model folder → recipe
     system.mode = "inspecting"
     for _ in range(5):
-        system._handle_part(system.camera.next_part())
+        system._handle_part([{"main": system.camera.next_part()}], time.time())
     client = create_app(system).test_client()
 
     pending = client.get("/api/archives").json["pending"]
@@ -227,5 +232,7 @@ def test_archive_results(tmp_path):
     assert client.get(f"/api/archives/{r['file']}").status_code == 200       # download
     assert client.get("/api/archives/..%2Fsecret.zip").status_code == 404
     assert client.post("/api/archives", json={}).status_code == 400          # nothing left to archive
-    assert client.delete(f"/api/archives/{r['file']}").json["ok"]
+    assert client.delete(f"/api/archives/{r['file']}").status_code == 403   # setup PIN required
+    tok = client.post("/api/setup/unlock", json={"pin": cfg.ui.setup_pin}).json["token"]
+    assert client.delete(f"/api/archives/{r['file']}", headers={"X-Setup-Token": tok}).json["ok"]
     assert client.get("/api/archives").json["archives"] == []

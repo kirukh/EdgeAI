@@ -242,7 +242,7 @@ def _rotate_canvas_image(img: np.ndarray, angle: float, mirror: bool) -> np.ndar
 
 
 def find_rotation(norm: np.ndarray, reference_norm: np.ndarray, allow_mirror: bool = False,
-                  step: float = 3.0) -> tuple[float, bool, float]:
+                  step: float = 4.0, mode: str = "full") -> tuple[float, bool, float]:
     """Angle (and mirroring) at which the part best matches the reference.
 
     1. Brute-force search over 0–360° on a small image (a few ms).
@@ -252,24 +252,28 @@ def find_rotation(norm: np.ndarray, reference_norm: np.ndarray, allow_mirror: bo
        i.e. by their hole pattern, because the outline alone cannot tell them apart.
     Returns (angle, mirrored, similarity).
     """
-    ref = _search_patch(reference_norm)
-    img = _search_patch(norm)
+    ref = _search_patch(reference_norm, 72)
+    img = _search_patch(norm, 72)
     if img.shape != ref.shape:
         img = cv2.resize(img, ref.shape[::-1], interpolation=cv2.INTER_AREA)
     side = ref.shape[0]
     c = (side / 2.0, side / 2.0)
+    ref_c = (ref - ref.mean()).ravel()
+    ref_n = float(np.linalg.norm(ref_c)) + 1e-9
+    imgs = {False: img, True: cv2.flip(img, 1)}
 
     def coarse_score(angle, mirror):
-        src = cv2.flip(img, 1) if mirror else img
-        rot = cv2.warpAffine(src, cv2.getRotationMatrix2D(c, angle, 1.0), (side, side), flags=cv2.INTER_LINEAR)
-        return _ncc(rot, ref)
+        rot = cv2.warpAffine(imgs[mirror], cv2.getRotationMatrix2D(c, angle, 1.0), (side, side), flags=cv2.INTER_LINEAR)
+        v = rot.ravel()
+        v = v - v.mean()
+        return float(v @ ref_c) / (float(np.linalg.norm(v)) * ref_n + 1e-9)
 
-    angles = np.arange(0, 360, step)
+    angles = np.arange(0, 360, step) if mode == "full" else np.array([0.0, 180.0])
     candidates = []
     for mirror in ((False, True) if allow_mirror else (False,)):
         scores = np.array([coarse_score(a, mirror) for a in angles])
         for i, sc in enumerate(scores):
-            if sc >= scores[i - 1] and sc >= scores[(i + 1) % len(scores)]:   # local maximum (circular)
+            if mode != "full" or (sc >= scores[i - 1] and sc >= scores[(i + 1) % len(scores)]):   # local max
                 candidates.append((sc, float(angles[i]), mirror))
     best_coarse = max(sc for sc, _, _ in candidates)
     candidates = sorted([cd for cd in candidates if cd[0] >= best_coarse - 0.15], reverse=True)[:8]
@@ -307,28 +311,69 @@ def align_part(
         return aligned
 
     # In which rotation (0–360°, optionally mirrored) does the part match the reference?
-    angle, mirror, _ = find_rotation(aligned.norm, reference_norm, cfg.allow_mirror)
+    angle, mirror = 0.0, False
+    if cfg.rotation_search in ("full", "flip") or cfg.allow_mirror:
+        mode = cfg.rotation_search if cfg.rotation_search in ("full", "flip") else "flip"
+        angle, mirror, _ = find_rotation(aligned.norm, reference_norm, cfg.allow_mirror, mode=mode)
+        if cfg.rotation_search == "off" and not mirror:
+            angle = 0.0
     if angle % 360 != 0 or mirror:
         to_canvas = _canvas_rotation(canvas, angle, mirror) @ to_canvas
         aligned = _render(frame, gray, det, to_canvas, canvas, part_level, bg_level)
 
     if cfg.use_ecc_refine:
-        refined = _ecc_refine(frame, gray, det, aligned, to_canvas, canvas, reference_norm, part_level, bg_level)
+        refined = _ecc_refine(frame, gray, det, aligned, to_canvas, canvas, reference_norm, part_level, bg_level,
+                              _use_outline_datum(cfg, reference_norm))
         if refined is not None:
             aligned = refined
     return aligned
 
 
-def _ecc_refine(frame, gray, det, aligned, to_canvas, canvas, ref, part_level, bg_level):
-    # Registration on the smoothed shape only (outline + holes). Surface texture such as
-    # brushed metal rotates with the part and would otherwise bias the result.
-    def shape(img):
-        return cv2.GaussianBlur((img > 0.5).astype(np.float32), (0, 0), 1.5)
+def _use_outline_datum(cfg: LocalizationConfig, reference_norm: np.ndarray) -> bool:
+    """Align on the outer contour only (datum edges) – except for round outlines,
+    which carry no rotation information; then the holes must be used as well."""
+    if cfg.ecc_datum == "outline":
+        return True
+    if cfg.ecc_datum == "all":
+        return False
+    binary = (reference_norm > 0.5).astype(np.uint8)
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not contours:
+        return False
+    c = max(contours, key=cv2.contourArea)
+    circularity = 4 * math.pi * cv2.contourArea(c) / max(1.0, cv2.arcLength(c, True) ** 2)
+    return circularity < 0.9
 
+
+def _ecc_refine(frame, gray, det, aligned, to_canvas, canvas, ref, part_level, bg_level, outline_datum=False):
+    # Registration on the smoothed shape only. Surface texture such as brushed metal
+    # rotates with the part and would otherwise bias the result.
+    # outline_datum=True: only the filled outer contour is used (like datum edges on a
+    # drawing), so a displaced hole cannot pull the alignment and hide its own offset.
+    # The grey values at the edge are kept (sub-pixel information); only the interior,
+    # at least 2 px away from any edge, is flattened to 1 to remove texture.
+    def shape(img):
+        img = np.clip(img, 0, 1).astype(np.float32)
+        binary = (img > 0.5).astype(np.uint8)
+        if outline_datum:
+            contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+            if contours:
+                binary = np.zeros_like(binary)
+                cv2.drawContours(binary, [max(contours, key=cv2.contourArea)], -1, 1, cv2.FILLED)
+        interior = cv2.erode(binary, np.ones((5, 5), np.uint8)) > 0
+        out = np.where(interior, 1.0, img if not outline_datum else np.where(binary > 0, np.maximum(img, 0.5 * binary), img))
+        return cv2.GaussianBlur(out.astype(np.float32), (0, 0), 1.0)
+
+    # ECC on the half-resolution image (4× fewer pixels). The smoothed edge image keeps
+    # sub-pixel information – a second pass at full resolution was measured to bring no
+    # accuracy gain (0.155 vs 0.156 px) but doubled the time.
+    tmpl, img = shape(ref), shape(aligned.norm)
+    half = lambda x: cv2.resize(x, (x.shape[1] // 2, x.shape[0] // 2), interpolation=cv2.INTER_AREA)
     warp = np.eye(2, 3, dtype=np.float32)
-    criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 100, 1e-5)
     try:
-        _, warp = cv2.findTransformECC(shape(ref), shape(aligned.norm), warp, cv2.MOTION_EUCLIDEAN, criteria, None, 3)
+        _, warp = cv2.findTransformECC(half(tmpl), half(img), warp, cv2.MOTION_EUCLIDEAN,
+                                       (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 80, 1e-5), None, 3)
+        warp[:, 2] *= 2.0
     except cv2.error:
         return None
     # Plausibility check: only accept small corrections
