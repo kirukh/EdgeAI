@@ -47,7 +47,8 @@ def create_app(system: QCSystem) -> Flask:
     # endpoints that need the setup PIN (POST/DELETE); everything else is supervisor level
     SETUP_ENDPOINTS = {"model_retrain", "model_learn_collected", "model_discard_collected", "model_sensitivity",
                        "model_delete", "settings", "io_test", "calib_start", "calib_capture", "calib_compute",
-                       "calib_cancel", "calib_delete", "reset", "archive_delete", "sim", "focus"}
+                       "calib_cancel", "calib_delete", "reset", "archive_delete", "sim", "focus",
+                       "method_settings", "model_restore"}
 
     def setup_unlocked() -> bool:
         if not ui.setup_pin:
@@ -118,6 +119,10 @@ def create_app(system: QCSystem) -> Flask:
     @app.get("/")
     def index():
         return send_from_directory(static_dir, "index.html")
+
+    @app.get("/static/<path:name>")
+    def static_file(name):
+        return send_from_directory(static_dir, name, max_age=0)   # revalidate (ETag) – no stale UI after an update
 
     @app.get("/stream.mjpg")
     def stream():
@@ -251,6 +256,12 @@ def create_app(system: QCSystem) -> Flask:
         _model_path(slug)
         return ok(sensitivity=system.set_sensitivity(slug, request.json or {}))
 
+    @app.post("/api/models/<slug>/restore")
+    def model_restore(slug):
+        _model_path(slug)
+        system.restore_model(slug)
+        return ok()
+
     @app.delete("/api/models/<slug>")
     def model_delete(slug):
         _model_path(slug)
@@ -287,6 +298,10 @@ def create_app(system: QCSystem) -> Flask:
         d = request.json or {}
         system.update_settings(d.get("lighting_mode"), d.get("self_learning"), d.get("self_learning_auto"))
         return ok()
+
+    @app.post("/api/method-settings")
+    def method_settings():
+        return ok(**system.set_method_defaults(request.json or {}))
 
     @app.post("/api/focus")
     def focus():

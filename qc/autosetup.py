@@ -103,7 +103,7 @@ def edge_width(gray: np.ndarray, contour: np.ndarray, n: int = 72, half: int = 7
         i10 = np.searchsorted(v, 0.1)
         i90 = np.searchsorted(v, 0.9)
         if 0 < i10 < len(v) and 0 < i90 < len(v):
-            widths.append((t[i90] - t[i10]))
+            widths.append(t[i90] - t[i10])
     return float(np.median(widths)) if len(widths) >= 8 else None
 
 
@@ -133,13 +133,6 @@ def crop_for_path(center: tuple[float, float], diameter: tuple[float, float], ax
     x = float(np.clip(center[0] - f / 2, 0.0, 1.0 - f))
     y = float(np.clip(center[1] - f / 2, 0.0, 1.0 - f))
     return (round(x, 5), round(y, 5), round(f, 5), round(f, 5)), round(1.0 / f, 3)
-
-
-def fits(diameter: tuple[float, float], axis: str, cfg: AutoSetupConfig) -> bool:
-    """Does the part with its margins fit into the full field of view at all?"""
-    dw, dh = diameter
-    return (cfg.margin_along * dw <= 1.0 and cfg.margin_across * dh <= 1.0) if axis == "x" else \
-        (cfg.margin_across * dw <= 1.0 and cfg.margin_along * dh <= 1.0)
 
 
 def path_from_track(points: list[tuple[float, float, float]]) -> dict | None:

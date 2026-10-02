@@ -2,5 +2,7 @@ numpy>=1.24
 opencv-python-headless>=4.8   # on the Pi alternatively: sudo apt install python3-opencv
 scipy>=1.10
 flask>=2.3
+waitress>=2.1             # production web server (on the Pi: sudo apt install python3-waitress)
+pillow>=9                 # only for `main.py board` (printable checkerboard)
 # Raspberry Pi only (via apt, not pip): python3-picamera2
 # tests only: pytest

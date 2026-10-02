@@ -323,8 +323,8 @@ class QCModel:
     def load(cls, path: str | Path) -> "QCModel":
         path = Path(path)
         meta = json.loads((path / "meta.json").read_text(encoding="utf-8"))
-        loc = _merge(LocalizationConfig(), meta["localization"])
-        mcfg = _merge(MethodConfig(), meta["method_config"])
+        loc = _merge(LocalizationConfig(), meta["localization"], strict=False)
+        mcfg = _merge(MethodConfig(), meta["method_config"], strict=False)
         model = cls(meta["name"], loc, mcfg)
         model.created = meta["created"]
         model.canvas = tuple(meta["canvas"])

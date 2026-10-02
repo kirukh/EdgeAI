@@ -13,7 +13,7 @@ marked in the image.
 | | Who | What |
 |---|---|---|
 | **Operator screen** (default, no PIN) | Supervisor at the conveyor | Select part · Start/Stop · big OK/NOK with the defect in plain words · *Teach in new part* (2-step assistant) · *Finish batch* (ZIP + reset) · *Reference part check* · “Result wrong?” button |
-| **Setup area** (🔒 Setup, PIN) | Setup technician | Methods, sensitivity, calibration, lighting mode, GPIO, drift values, model management, archives, simulator |
+| **Setup area** (🔒 Setup, PIN) | Setup technician | Live scores and history, methods, sensitivity, model management incl. *Undo last update*, calibration, lighting mode, focus assistant, GPIO, drift values, archives, log messages, simulator |
 
 The PIN is set in `config.json → "ui": {"setup_pin": "1234"}` – **change it**. `""` = no PIN. The PIN is checked
 on the server (not only hidden in the page); after 5 wrong entries input is blocked for 60 s, and the setup area
@@ -44,10 +44,11 @@ Workflow on the operator screen:
    in the picture of the last part. Wrong result? → *Part is actually GOOD / DEFECTIVE*.
 3. **✓ Finish batch** at the end: all results are saved as a ZIP file, counters reset.
 
-The setup area (PIN, default `1234`) contains the full technical interface with three tabs: **Operation**
-(statistics, history with scores, self-test, learning with method choice, archive list, messages), **Models**
-(method settings, sensitivity, retraining, self-learning status) and **Setup** (lighting mode,
-self-learning, camera calibration, drift monitor, GPIO outputs, simulator).
+The setup area (PIN, default `1234`) shows the technical details next to the live view (scores of every method,
+history) and has three tabs: **Overview** (statistics, archive downloads, messages), **Models** (method settings
+for new models, sensitivity, retraining, self-learning, *Undo last update*) and **Setup** (lighting mode,
+self-learning, camera & focus, calibration, drift monitor, GPIO outputs, simulator). Teaching in, start/stop,
+reference check and finishing a batch are done on the operator screen only – one way for everything.
 
 ![Setup area](docs/screenshot_ui.png)
 
@@ -101,7 +102,7 @@ taught in by mistake.
 | **Dual light** | Setup tab + `io` pins | Per part one backlight image (exact silhouette → holes/outline) and one front-light image (surface, blind holes). Separate model per light, results merged (“not drilled through” from front light replaces “missing” from backlight). |
 | **Camera calibration** | Setup tab / `calibrate` | Checkerboard → mm/px, optional lens-distortion correction. Dimensions and tolerances in mm (`pos_tol_mm`, `dia_tol_mm`). Unreliable distortion estimates (board not tilted enough) are rejected automatically. |
 | **Drift monitor** | Setup tab, header | Contrast, background, part size and edge sharpness vs. the learning phase; warning if lighting, camera distance or focus change. |
-| **Self-test** | Operation tab | Reference part check at shift start: known good part must be OK, known bad part NOK. Logged, shown in the header, included in the archive. |
+| **Self-test** | operator screen → *Reference part check* | Reference part check at shift start: known good part must be OK, known bad part NOK. Logged, shown in the header, included in the archive. |
 | **GPIO outputs** | `io` in config.json | Reject pulse with travel-time delay (counted from the capture), OK/NOK lamps, light switching. Runs simulated without a Pi. |
 | **Self-learning** | automatic (Setup tab to switch off) | Clear good parts are collected and trained in automatically every 30 parts, with safety checks (see below). |
 | **Rotation search mode** | `localization.rotation_search` | `full` (any rotation), `flip` (0°/180°, mechanically guided parts), `off`. |
@@ -231,43 +232,32 @@ parts. Hole and outline defects are not affected.
 HQ Camera with a short exposure time. Mount the camera perpendicular above the belt at a fixed distance and
 shield it from ambient light.
 
-**1. Install (once).** Use Raspberry Pi OS (Bookworm or newer); it includes the camera stack.
-
-```bash
-sudo apt update
-sudo apt install -y python3-picamera2 python3-opencv python3-scipy python3-flask
-rpicam-hello -t 5000          # camera test: a preview must appear (or no error on a headless Pi)
-```
-
-**2. Copy the project** to the Pi (e.g. unzip it to `/home/pi/pi_qc`) and create the configuration:
+**Installation (once)** – Raspberry Pi OS (Bookworm or newer), project unzipped e.g. to `~/pi_qc`:
 
 ```bash
 cd ~/pi_qc
-python3 -m venv --system-site-packages .venv   # system-site-packages because of picamera2
-cp config.example.json config.json             # already contains "source": "pi"
+bash deploy/install.sh
 ```
 
-**3. Start:**
+The script installs the system packages (picamera2, OpenCV, Flask, waitress), creates the Python environment
+`.venv`, creates `config.json` from the Raspberry Pi 3 + Camera Module v2 preset, asks for the setup PIN and
+installs the autostart service `qc`. From then on the inspection **starts by itself at every boot** and is
+restarted automatically if it ever stops. Open the UI on a laptop/tablet/phone: `http://<IP of the Pi>:8000`.
 
-```bash
-.venv/bin/python main.py --config config.json web --camera pi
-```
+| Task | Command |
+|---|---|
+| Restart after a configuration change | `sudo systemctl restart qc` |
+| Live log / errors | `journalctl -u qc -f` or `data/logs/qc.log` |
+| Stop autostart | `sudo systemctl disable --now qc` |
+| Start by hand (e.g. for testing) | `.venv/bin/python main.py web --camera pi` (stop the service first) |
+| Camera test | `rpicam-hello -t 5000` (service stopped – only one program can use the camera) |
 
-**4. Open the UI** from a laptop/tablet on the same network: `http://<IP of the Pi>:8000`
-(find the IP with `hostname -I`).
+Then teach in a part on the operator screen (*＋ Teach in new part*): the automatic camera setup sets exposure,
+white balance, zoom and belt direction. Only the lens of a camera without focus motor has to be focused once by
+hand (setup area → *Setup* → *Camera & focus* → focus assistant).
 
-**5. Set up the image** before teaching in:
-- Look at the live view. The part must be clearly visible, sharp and completely in the image.
-- Adjust `exposure_us` in `config.json` so the metal is bright but not blown out (white). Shorter exposure =
-  less motion blur on a moving belt. Restart after changing the configuration.
-- If the belt runs from top to bottom in the image instead of left to right, set `"trigger": {"axis": "y"}`.
-- When the part passes the centre, the trigger lines turn grey for a moment (= captured). If parts are not
-  captured, the contrast to the belt is usually too low. For a stopped belt use *Manual capture*.
-
-**6. Teach in and inspect** exactly as described in the quick start.
-
-To start automatically at boot, use `deploy/qc.service` (instructions inside the file). Other camera sources:
-`--camera usb:0`, or `--camera folder:/path/to/photos` to inspect an image folder one image at a time.
+Other camera sources: `--camera usb:0`, or `--camera folder:/path/to/photos` to inspect an image folder one image
+at a time.
 
 **Camera settings** (`config.json → camera`): fixed exposure (`exposure_us`), fixed gain and fixed white
 balance are preset on purpose. Automatic settings would change the brightness from part to part and
@@ -399,22 +389,42 @@ qc/methods.py            inspection methods geometry / diff / pca
 qc/model.py              one channel: learning, inspection, fusion decision, drift measurements
 qc/recipe.py             part type = 1 or 2 channels (single/dual light), sensitivity, feedback refs, retraining
 qc/visualize.py          defect location marking, heatmap
-qc/system.py             process control, trigger, multi-shot, dual capture, feedback, self-test, log
+qc/system.py             core: camera thread → inspection queue → worker thread, teach-in, inspection, archive
+qc/system_camera.py      camera profiles, automatic camera setup, focus assistant, calibration session
+qc/system_models.py      model management, undo, self-learning, supervisor feedback, reference part check
+qc/system_status.py      status for the UI, plain-language notices for the supervisor
+qc/trigger.py            conveyor trigger (one capture per part)
+qc/autosetup.py          calculations of the automatic camera setup (exposure, zoom, sharpness, belt path)
 qc/calibration.py        checkerboard calibration, undistortion, mm/px
 qc/drift.py              image-quality drift monitor
 qc/io_control.py         GPIO: reject, lamps, lighting (simulated without a Pi)
-qc/webapp.py + static/   supervisor UI (Flask, no external dependencies)
+qc/webapp.py             web server API (Flask; served by waitress when installed), setup PIN
+qc/static/               index.html, app.css, common.js, setup.js (setup area), operator.js (operator screen)
+deploy/install.sh        one-time installation on the Pi incl. autostart service
 qc/synthetic.py          synthetic parts with defects
 qc/evaluate.py           comparison of method × representation × lighting
 qc/archive.py            zip + summary of finished batches, clear results
-tests/                   pytest
+tests/                   pytest (51 tests, incl. a stand-in for picamera2 to test the Pi camera code)
 ```
+
+## Robustness
+
+| Feature | What it does |
+|---|---|
+| Inspection queue | The camera thread only captures; a worker thread inspects. The live view and the trigger keep running while the Pi 3 inspects. If more than 3 parts wait, the next part is **rejected without inspection** (fail-safe) and the operator screen says so. |
+| Log file | `data/logs/qc.log` (3 × 1 MB rotating) – also errors from the background threads. |
+| Configuration check | Typos (`"exposure"` instead of `"exposure_us"`) and invalid values stop the start with a clear message instead of being silently ignored. |
+| Saved settings | Settings changed in the setup area (lighting mode, self-learning, methods for new models) are kept in `data/settings.json` and survive a restart; `config.json` is never rewritten. |
+| Undo last update | Before a model is replaced (teach-in with the same name, retraining, self-learning) the previous version is kept; *Models → Undo last update* swaps them back. |
+| Autostart | systemd service with automatic restart (`deploy/install.sh`). |
+| Production web server | waitress instead of Flask's development server (falls back to Flask if waitress is missing). |
 
 ## Open points / extensions
 
 - **Real images**: fine-tune the thresholds (`method` section of the configuration) on real parts.
-- **Hardware not yet tested**: GPIO outputs, light switching and the Pi camera are implemented but only
-  tested simulated. Check the timing of the light switching (`lighting.settle_frames`) on the real camera.
+- **Hardware partly tested**: the Pi camera runs on a Raspberry Pi 3 + Camera Module v2; the automatic camera
+  setup (crop, white balance) and the GPIO outputs are tested against simulations only. Check the timing of the
+  light switching (`lighting.settle_frames`) on the real camera.
 - **Stronger ML**: pretrained features (e.g. MobileNet via TFLite) plus PatchCore-style nearest-neighbour
   comparison could be added as another method in `methods.py`.
 - **PLC connection** instead of/in addition to GPIO (e.g. Modbus TCP): hook in `QCSystem._inspect`.

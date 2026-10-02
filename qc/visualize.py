@@ -8,7 +8,6 @@ from .alignment import AlignedPart
 
 GREEN = (60, 190, 60)
 RED = (40, 40, 230)
-ORANGE = (0, 150, 255)
 
 
 def _to_orig(pts: np.ndarray, to_orig: np.ndarray) -> np.ndarray:
@@ -74,3 +73,8 @@ def annotate(aligned: AlignedPart, ok: bool, defects: list, heat: np.ndarray | N
     cv2.rectangle(frame, (0, 0), (110, 46), GREEN if ok else RED, cv2.FILLED)
     cv2.putText(frame, banner, (12, 36), cv2.FONT_HERSHEY_DUPLEX, 1.2, (255, 255, 255), 2, cv2.LINE_AA)
     return frame, detail
+
+
+def encode_jpg(img: np.ndarray, quality: int = 85) -> bytes:
+    """JPEG bytes for the web UI."""
+    return cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])[1].tobytes()

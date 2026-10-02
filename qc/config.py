@@ -242,24 +242,82 @@ class AppConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AppConfig":
-        return _merge(cls(), data)
+        cfg = _merge(cls(), data)
+        cfg.validate()
+        return cfg
 
     @classmethod
     def load(cls, path: str | Path | None) -> "AppConfig":
         if path is None or not Path(path).exists():
             return cls()
-        return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            raise ConfigError(f"{path}: not valid JSON (line {e.lineno}, column {e.colno}): {e.msg}") from None
+        return cls.from_dict(data)
+
+    def validate(self) -> None:
+        """Clear error messages for typical mistakes instead of strange behaviour later."""
+        from .methods import METHODS
+        from .representations import REPRESENTATIONS
+
+        errors = []
+
+        def one_of(path, value, allowed):
+            if value not in allowed:
+                errors.append(f"{path} = {value!r} – allowed: {', '.join(map(str, allowed))}")
+
+        def at_least(path, value, minimum):
+            if not isinstance(value, (int, float)) or value < minimum:
+                errors.append(f"{path} = {value!r} – must be a number ≥ {minimum}")
+
+        src = self.camera.source
+        if not (src in ("sim", "pi") or src.startswith(("usb:", "folder:"))):
+            errors.append(f"camera.source = {src!r} – allowed: sim, pi, usb:<n>, folder:<path>")
+        at_least("camera.width", self.camera.width, 160)
+        at_least("camera.height", self.camera.height, 120)
+        at_least("camera.fps", self.camera.fps, 1)
+        at_least("camera.exposure_us", self.camera.exposure_us, 0)
+        if self.camera.sensor_mode is not None and len(self.camera.sensor_mode) != 2:
+            errors.append("camera.sensor_mode – must be [width, height], e.g. [1640, 1232]")
+        at_least("localization.work_width", self.localization.work_width, 160)
+        one_of("localization.rotation_search", self.localization.rotation_search, ("full", "flip", "off"))
+        one_of("localization.ecc_datum", self.localization.ecc_datum, ("auto", "outline", "all"))
+        one_of("trigger.axis", self.trigger.axis, ("x", "y"))
+        for m in self.method.methods:
+            one_of("method.methods[]", m, tuple(METHODS))
+        one_of("method.diff_representation", self.method.diff_representation, tuple(REPRESENTATIONS))
+        one_of("method.pca_representation", self.method.pca_representation, tuple(REPRESENTATIONS))
+        one_of("method.decision", self.method.decision, ("fusion", "or"))
+        one_of("lighting.mode", self.lighting.mode, ("single", "dual"))
+        one_of("lighting.idle_light", self.lighting.idle_light, ("front", "back"))
+        at_least("inspection.shots_per_part", self.inspection.shots_per_part, 3)
+        at_least("target_reference_count", self.target_reference_count, 3)
+        at_least("autosetup.max_zoom", self.autosetup.max_zoom, 1.0)
+        if errors:
+            raise ConfigError("Configuration error(s):\n  - " + "\n  - ".join(errors))
 
 
-def _merge(obj: Any, data: dict[str, Any]) -> Any:
-    """Recursively overwrite the fields of a dataclass with values from ``data``."""
+class ConfigError(ValueError):
+    pass
+
+
+def _merge(obj: Any, data: dict[str, Any], strict: bool = True) -> Any:
+    """Recursively overwrite the fields of a dataclass with values from ``data``.
+    Unknown keys (typos) are reported instead of being silently ignored (``strict=False``:
+    skipped – used for settings stored inside older models)."""
+    known = {f.name for f in fields(obj)}
+    unknown = sorted(k for k in data if k not in known)
+    if unknown and strict:
+        raise ConfigError(f"Unknown setting(s) in {type(obj).__name__}: {', '.join(unknown)} "
+                          f"– known: {', '.join(sorted(known))}")
     for f in fields(obj):
         if f.name not in data:
             continue
         current = getattr(obj, f.name)
         value = data[f.name]
         if is_dataclass(current) and isinstance(value, dict):
-            _merge(current, value)
+            _merge(current, value, strict)
         elif isinstance(current, tuple) and isinstance(value, list):
             setattr(obj, f.name, tuple(value))
         else:
@@ -267,5 +325,3 @@ def _merge(obj: Any, data: dict[str, Any]) -> Any:
     return obj
 
 
-def method_config_from_dict(data: dict[str, Any]) -> MethodConfig:
-    return _merge(MethodConfig(), data)

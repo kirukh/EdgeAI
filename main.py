@@ -22,7 +22,36 @@ from pathlib import Path
 
 import cv2
 
-from qc.config import AppConfig
+from qc.config import AppConfig, ConfigError
+
+
+def _setup_logging(cfg: AppConfig) -> Path:
+    """Log file next to the models (data/logs/qc.log, 3 × 1 MB rotating) + console."""
+    import logging
+    from logging.handlers import RotatingFileHandler
+
+    log_dir = Path(cfg.storage.models_dir).parent / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log = logging.getLogger("qc")
+    log.setLevel(logging.INFO)
+    if not log.handlers:
+        fh = RotatingFileHandler(log_dir / "qc.log", maxBytes=1_000_000, backupCount=3, encoding="utf-8")
+        fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(message)s"))
+        log.addHandler(fh)
+        ch = logging.StreamHandler()
+        ch.setFormatter(logging.Formatter("%(levelname)-7s %(message)s"))
+        log.addHandler(ch)
+    return log_dir / "qc.log"
+
+
+def _serve(app, host: str, port: int) -> None:
+    """waitress (production WSGI server, if installed) – otherwise Flask's built-in server."""
+    try:
+        from waitress import serve
+    except ImportError:
+        app.run(host=host, port=port, threaded=True, debug=False, use_reloader=False)
+        return
+    serve(app, host=host, port=port, threads=8, channel_timeout=60, ident=None)
 
 
 def _cfg(args) -> AppConfig:
@@ -50,11 +79,12 @@ def cmd_web(args):
         cfg.camera.sim_part_type = args.part_type
     if args.any_angle:
         cfg.camera.sim_any_angle = True
+    log_file = _setup_logging(cfg)
     system = QCSystem(cfg, open_camera(cfg.camera))
     system.start()
-    print(f"Web UI: http://{args.host}:{args.port}/  (camera: {system.camera.name})")
+    print(f"Web UI: http://{args.host}:{args.port}/  (camera: {system.camera.name}, log: {log_file})")
     try:
-        create_app(system).run(host=args.host, port=args.port, threaded=True, debug=False, use_reloader=False)
+        _serve(create_app(system), args.host, args.port)
     finally:
         system.stop()
 
@@ -352,7 +382,11 @@ def main(argv=None):
     e.set_defaults(func=cmd_evaluate)
 
     args = p.parse_args(argv)
-    return args.func(args) or 0
+    try:
+        return args.func(args) or 0
+    except ConfigError as e:
+        print(f"{args.config}: {e}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

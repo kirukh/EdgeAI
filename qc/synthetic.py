@@ -52,13 +52,6 @@ PART_TYPES: dict[str, dict] = {
     },
 }
 
-PART_LABELS = {
-    "A": "plate with two holes",
-    "B": "hole + slot",
-    "C": "triangle with three holes",
-    "D": "square with four holes",
-}
-
 
 def outline_of(spec: dict) -> np.ndarray:
     """Outline polygon of a part type in local coordinates (centre = 0,0)."""

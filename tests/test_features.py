@@ -11,7 +11,7 @@ import pytest
 
 from qc import calibration as qcal
 from qc import synthetic as S
-from qc.alignment import align_part, detect_part, to_gray
+from qc.alignment import detect_part, to_gray
 from qc.camera import SimulatorSource
 from qc.config import AppConfig, DriftConfig, IOConfig, LocalizationConfig, MethodConfig
 from qc.drift import DriftMonitor
@@ -543,3 +543,123 @@ def test_automatic_focus_on_cameras_with_focus_motor(tmp_path):
         assert r["edge_width_px"] < 3.0
     finally:
         s.stop()
+
+
+# ------------------------------------------------------------ robustness / refactoring
+def test_overloaded_worker_rejects_uninspected_parts(tmp_path):
+    """Queue full (Pi cannot keep up): the part is rejected without inspection (fail-safe) and reported."""
+    s = _system(tmp_path)
+    s.cfg.io.reject_pin = 17                       # simulated GPIO
+    s.mode = "inspecting"
+    frame = {"main": np.zeros((48, 64, 3), np.uint8)}
+    for _ in range(s.QUEUE_PARTS):                 # worker not started → the queue fills up
+        s._submit([frame], time.time(), False)
+    assert s.skipped == 0
+    s._submit([frame], time.time(), False)
+    assert s.skipped == 1 and s.io.rejects == 1
+    assert any("without inspection" in n["text"] for n in s.supervisor_notices())
+    s.io.close()
+
+
+def test_config_validation_reports_typos_and_bad_values():
+    from qc.config import ConfigError
+
+    for f in ("config.example.json", "config.pi3_imx219.json"):
+        AppConfig.load(f)                                                   # shipped files are valid
+    with pytest.raises(ConfigError, match="exposure"):
+        AppConfig.from_dict({"camera": {"exposure": 3000}})                # typo of exposure_us
+    with pytest.raises(ConfigError, match="trigger.axis"):
+        AppConfig.from_dict({"trigger": {"axis": "z"}})
+    with pytest.raises(ConfigError, match="shots_per_part"):
+        AppConfig.from_dict({"inspection": {"shots_per_part": 1}})
+
+
+def test_settings_from_the_setup_area_survive_a_restart(tmp_path):
+    s = _system(tmp_path)
+    s.update_settings(self_learning_auto=False)
+    s.set_method_defaults({"methods": ["geometry", "diff"], "pca_representation": "norm"})
+    s.io.close()
+    s2 = _system(tmp_path)                                                  # "restart"
+    assert s2.cfg.self_learning.auto is False
+    assert s2.cfg.method.methods == ["geometry", "diff"]
+    s2.io.close()
+
+
+def test_model_update_can_be_undone(tmp_path):
+    rng = np.random.default_rng(51)
+    r = Recipe.train("Plate", [{"main": f} for f in shots("A", "front", 8, rng)], LocalizationConfig(),
+                     {"main": MethodConfig(methods=["geometry"])})
+    r.save(tmp_path)
+    assert not Recipe.has_previous(tmp_path / "Plate")
+    r.add_collected({"main": shots("A", "front", 1, rng)[0]}, max_pool=10)
+    r2 = Recipe.train("Plate", [{"main": f} for f in shots("A", "front", 6, rng)], LocalizationConfig(),
+                      {"main": MethodConfig(methods=["geometry", "diff"])})
+    r2.save(tmp_path)                                                       # same name → old version kept
+    assert Recipe.has_previous(tmp_path / "Plate")
+    restored = Recipe.restore_previous(tmp_path / "Plate")
+    assert list(restored.channels["main"].methods) == ["geometry"]
+    assert restored.collected_count() == 1                                   # side folders stay with the part
+    again = Recipe.restore_previous(tmp_path / "Plate")                     # the undo can be undone
+    assert list(again.channels["main"].methods) == ["geometry", "diff"]
+
+
+def test_pi_camera_source_against_fake_picamera2(monkeypatch):
+    """The Pi camera code (normally only runnable on a Pi) against a stand-in for picamera2."""
+    import sys
+    import types
+
+    class FakeRequest:
+        def make_array(self, name):
+            return np.zeros((480, 640, 3), np.uint8)
+
+        def get_metadata(self):
+            return {"SensorTimestamp": time.monotonic_ns() - 20_000_000, "ColourGains": (1.5, 1.7)}
+
+        def release(self):
+            pass
+
+    class FakePicamera2:
+        camera_controls = {"ScalerCrop": ((0, 0, 64, 64), (0, 0, 3280, 2464), (0, 0, 3280, 2464)), "ExposureTime": (1, 1, 1)}
+        camera_properties = {"Model": "imx219", "PixelArraySize": (3280, 2464)}
+
+        def __init__(self):
+            self.controls, self.video_kwargs = {}, None
+
+        def create_video_configuration(self, **kw):
+            self.video_kwargs = kw
+            return kw
+
+        def configure(self, c): pass
+        def start(self): pass
+        def stop(self): pass
+        def close(self): pass
+
+        def set_controls(self, d):
+            self.controls.update(d)
+
+        def capture_request(self):
+            return FakeRequest()
+
+        def capture_metadata(self):
+            return {"ScalerCrop": (0, 0, 3280, 2464)}
+
+        def camera_configuration(self):
+            return {"sensor": {"output_size": (1640, 1232)}}
+
+    monkeypatch.setitem(sys.modules, "picamera2", types.SimpleNamespace(Picamera2=FakePicamera2))
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    from qc.camera import PiCameraSource
+    from qc.config import CameraConfig
+
+    cfg = CameraConfig(source="pi", width=640, height=480, sensor_mode=[1640, 1232], exposure_us=2000)
+    cam = PiCameraSource(cfg)
+    assert cam.cam.video_kwargs["sensor"] == {"output_size": (1640, 1232)} and cam.cam.video_kwargs["queue"] is False
+    assert not cam.has_autofocus and "fixed-focus" in cam.info and "readout 1640×1232" in cam.info
+    assert cam.cam.controls["AeEnable"] is False and cam.cam.controls["ExposureTime"] == 2000
+    frame = cam.read()
+    assert frame.shape == (480, 640, 3) and 0.01 < cam.last_age_s < 0.5            # age from the sensor timestamp
+    assert cam.awb_result() == (1.5, 1.7)
+    cam.set_crop((0.25, 0.25, 0.5, 0.5))
+    assert cam.cam.controls["ScalerCrop"] == (820, 616, 1640, 1232) and cam.crop == (0.25, 0.25, 0.5, 0.5)
+    cam.set_exposure(800, 2.0)
+    assert cam.cam.controls["ExposureTime"] == 800 and cam.cam.controls["AnalogueGain"] == 2.0

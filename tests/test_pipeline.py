@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from qc import synthetic as S
-from qc.alignment import localize_and_align
+from qc.alignment import align_part, detect_part, resize_to_width, to_gray
 from qc.config import AppConfig, LocalizationConfig, MethodConfig
 from qc.model import QCModel, TrainingError, list_models, retrain
 
@@ -30,14 +30,20 @@ def front_model():
     return QCModel.train("A-front", frames("A", "front", 12, rng), LocalizationConfig(), MethodConfig())
 
 
+def _align(frame, cfg, canvas=None, ref_norm=None):
+    work = resize_to_width(frame, cfg.work_width)
+    return align_part(work, detect_part(to_gray(work), cfg), cfg, canvas, ref_norm)
+
+
 def test_alignment_handles_rotation_and_flip():
     rng = np.random.default_rng(0)
     cfg = LocalizationConfig()
     base = S.compose(S.make_part("A", None, rng), (320, 240, 0), "front", rng=rng)
-    ref = localize_and_align(base, cfg)
+    ref = _align(base, cfg)
+    canvas = (ref.gray.shape[1], ref.gray.shape[0])
     for ang in (7, -8, 180, 186):
         img = S.compose(S.make_part("A", None, rng), (300, 250, ang), "front", rng=rng)
-        a = localize_and_align(img, cfg, ref.canvas_size, ref.norm)
+        a = _align(img, cfg, canvas, ref.norm)
         diff = np.abs(np.clip(a.norm, 0, 1) - np.clip(ref.norm, 0, 1)).mean()
         assert diff < 0.03, f"Alignment at {ang}° inaccurate ({diff:.3f})"
 

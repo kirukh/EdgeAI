@@ -139,8 +139,12 @@ class Recipe:
         return [self.primary] + [c for c in self.channels if c != self.primary]
 
     # ------------------------------------------------------------ persistence
+    SIDE_FOLDERS = ("pending", "collected", "known_bad")      # belong to the part type, not to a version
+
     def save(self, models_dir: str | Path) -> Path:
         path = Path(models_dir) / slugify(self.name) if self.path is None else self.path
+        if (path / "recipe.json").exists():
+            self._backup(path)                     # keep the version being replaced (one step of undo)
         path.mkdir(parents=True, exist_ok=True)
         for ch, model in self.channels.items():
             model.save_to(path / "channels" / ch)
@@ -158,6 +162,49 @@ class Recipe:
         self.path = path
         self.save_meta()
         return path
+
+    @classmethod
+    def _backup(cls, path: Path) -> None:
+        prev = path / "previous"
+        tmp = path / "previous.tmp"
+        shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir()
+        shutil.copy2(path / "recipe.json", tmp / "recipe.json")
+        if (path / "channels").exists():
+            shutil.copytree(path / "channels", tmp / "channels", ignore=shutil.ignore_patterns(*cls.SIDE_FOLDERS))
+        shutil.rmtree(prev, ignore_errors=True)
+        tmp.rename(prev)
+
+    @classmethod
+    def has_previous(cls, path: Path) -> bool:
+        return (Path(path) / "previous" / "recipe.json").exists()
+
+    @classmethod
+    def restore_previous(cls, path: str | Path) -> "Recipe":
+        """Swaps the current and the previous version (so the undo can itself be undone).
+        Collected parts, known defective parts and queued references stay with the part type."""
+        path = Path(path)
+        prev = path / "previous"
+        if not cls.has_previous(path):
+            raise ValueError("There is no previous version of this model.")
+        swap = path / "swap.tmp"
+        shutil.rmtree(swap, ignore_errors=True)
+        swap.mkdir()
+        os.replace(path / "recipe.json", swap / "recipe.json")
+        if (path / "channels").exists():
+            os.replace(path / "channels", swap / "channels")
+        os.replace(prev / "recipe.json", path / "recipe.json")
+        if (prev / "channels").exists():
+            os.replace(prev / "channels", path / "channels")
+        for ch_dir in (swap / "channels").glob("*") if (swap / "channels").exists() else []:
+            for side in cls.SIDE_FOLDERS:                  # side folders move to the restored version
+                if (ch_dir / side).exists():
+                    target = path / "channels" / ch_dir.name / side
+                    if target.parent.exists() and not target.exists():
+                        os.replace(ch_dir / side, target)
+        shutil.rmtree(prev)
+        swap.rename(prev)
+        return cls.load(path)
 
     def save_meta(self) -> None:
         meta = {"name": self.name, "created": self.created, "channels": list(self.channels),
@@ -316,7 +363,7 @@ class Recipe:
             extra = model.learned_frames() + [c[ch] for c in collected]
             room = max(0, max_references - len(anchors))
             if len(extra) > room:
-                idx = np.random.default_rng(seed).choice(len(extra), room, replace=False)
+                idx = rng.choice(len(extra), room, replace=False)
                 extra = [extra[i] for i in sorted(idx)]
             new = QCModel.train(self.name, anchors + extra, model.loc_cfg, model.method_cfg,
                                 model.mm_per_px, model.calibration_id, n_anchor=len(anchors))
@@ -444,6 +491,7 @@ class Recipe:
             "mm_per_px": self.mm_per_px,
             "calibration_id": self.calibration_id,
             "camera_profile": self.camera_profile,
+            "has_previous": bool(self.path and self.has_previous(self.path)),
             "flagged": p.report.get("references_flagged_nok", []),
             "skipped": p.report.get("references_skipped", []),
         }

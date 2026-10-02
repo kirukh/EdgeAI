@@ -55,11 +55,6 @@ class AlignedPart:
     part_level: float
     bg_level: float
 
-    @property
-    def canvas_size(self) -> tuple[int, int]:
-        h, w = self.gray.shape[:2]
-        return w, h
-
 
 def to_gray(img: np.ndarray) -> np.ndarray:
     return img if img.ndim == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -445,18 +440,3 @@ def _ecc_refine(frame, gray, det, norm, to_canvas, canvas, ref, part_level, bg_l
     # ECC: aligned(W·x) ≈ ref(x)  →  canvas→original = inv(to_canvas) · W
     to_orig = np.linalg.inv(to_canvas) @ w3
     return _render(frame, gray, det, np.linalg.inv(to_orig), canvas, part_level, bg_level)
-
-
-def localize_and_align(
-    frame: np.ndarray,
-    cfg: LocalizationConfig,
-    canvas: tuple[int, int] | None = None,
-    reference_norm: np.ndarray | None = None,
-    require_complete: bool = True,
-) -> AlignedPart | None:
-    """Convenience function: working resolution → detection → alignment."""
-    frame = resize_to_width(frame, cfg.work_width)
-    det = detect_part(to_gray(frame), cfg)
-    if det is None or (require_complete and not det.complete):
-        return None
-    return align_part(frame, det, cfg, canvas, reference_norm)
