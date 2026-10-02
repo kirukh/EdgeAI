@@ -239,18 +239,22 @@ cd ~/pi_qc
 bash deploy/install.sh
 ```
 
-The script installs the system packages (picamera2, OpenCV, Flask, waitress), creates the Python environment
-`.venv`, creates `config.json` from the Raspberry Pi 3 + Camera Module v2 preset, asks for the setup PIN and
-installs the autostart service `qc`. From then on the inspection **starts by itself at every boot** and is
-restarted automatically if it ever stops. Open the UI on a laptop/tablet/phone: `http://<IP of the Pi>:8000`.
+The script works **with or without sudo rights**. With sudo it installs the system packages and a system service
+`qc`; without sudo it checks that the packages are present (on Raspberry Pi OS Desktop they usually are), installs
+the web server waitress into the project's own environment `.venv` and sets up a **user service** (starts when
+your user is logged in – with the Desktop's auto-login that is at boot; fallback: `crontab @reboot`). It creates
+`config.json` from the Raspberry Pi 3 + Camera Module v2 preset and asks for the setup PIN. Open the UI on a
+laptop/tablet/phone: `http://<IP of the Pi>:8000`.
 
-| Task | Command |
-|---|---|
-| Restart after a configuration change | `sudo systemctl restart qc` |
-| Live log / errors | `journalctl -u qc -f` or `data/logs/qc.log` |
-| Stop autostart | `sudo systemctl disable --now qc` |
-| Start by hand (e.g. for testing) | `.venv/bin/python main.py web --camera pi` (stop the service first) |
-| Camera test | `rpicam-hello -t 5000` (service stopped – only one program can use the camera) |
+| Task | with sudo | without sudo |
+|---|---|---|
+| Restart after a configuration change | `sudo systemctl restart qc` | `systemctl --user restart qc` |
+| Live log / errors | `journalctl -u qc -f` | `journalctl --user -u qc -f` |
+| Stop autostart | `sudo systemctl disable --now qc` | `systemctl --user disable --now qc` |
+| Start by hand (stop the service first) | `.venv/bin/python main.py web --camera pi` | same |
+| Camera test (service stopped – only one program can use the camera) | `rpicam-hello --list-cameras` | same |
+
+The log file `data/logs/qc.log` is written in every case.
 
 Then teach in a part on the operator screen (*＋ Teach in new part*): the automatic camera setup sets exposure,
 white balance, zoom and belt direction. Only the lens of a camera without focus motor has to be focused once by
