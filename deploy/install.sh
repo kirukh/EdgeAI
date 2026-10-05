@@ -3,7 +3,9 @@
 # Works WITH or WITHOUT sudo rights – the script detects which and adapts.
 #
 #   cd ~/pi_qc            # the unzipped project folder (any name works)
-#   bash deploy/install.sh
+#   bash deploy/install.sh                  # with autostart
+#   bash deploy/install.sh --no-autostart   # without autostart (start by hand; add it later by
+#                                            # running the script again without the option)
 #
 # What it does:
 #   1. system packages: installs them with sudo, otherwise only checks they are present
@@ -17,6 +19,8 @@
 #
 # Afterwards: open http://<IP of the Pi>:8000 on a laptop, tablet or phone.
 set -euo pipefail
+NO_AUTOSTART=0
+[ "${1:-}" = "--no-autostart" ] && NO_AUTOSTART=1
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_USER="${SUDO_USER:-$(id -un)}"
@@ -72,6 +76,13 @@ else
   echo "   config.json exists – left unchanged"
 fi
 .venv/bin/python -c "from qc.config import AppConfig; AppConfig.load('config.json'); print('   config.json is valid')"
+
+if [ $NO_AUTOSTART = 1 ]; then
+  echo "== Done (no autostart). Start the inspection by hand:"
+  echo "     cd $DIR && .venv/bin/python main.py web --camera pi      (stop with Ctrl+C)"
+  echo "   Then open http://<IP of the Pi>:8000 – IP: $(hostname -I)"
+  exit 0
+fi
 
 echo "== 4/4 Autostart"
 UNIT="[Unit]

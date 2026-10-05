@@ -239,6 +239,8 @@ cd ~/pi_qc
 bash deploy/install.sh
 ```
 
+Without autostart (start by hand, add the autostart later by running the script again): `bash deploy/install.sh --no-autostart`.
+
 The script works **with or without sudo rights**. With sudo it installs the system packages and a system service
 `qc`; without sudo it checks that the packages are present (on Raspberry Pi OS Desktop they usually are), installs
 the web server waitress into the project's own environment `.venv` and sets up a **user service** (starts when
