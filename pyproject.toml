@@ -1,14 +1,11 @@
 [project]
 name = "pi-qc"
-version = "2.1.1"
+version = "2.1.2"
 description = "Camera-based OK/NOK inspection of metal parts on a conveyor (Raspberry Pi)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    # Raspberry Pi (ARM Linux): the camera library picamera2 comes from apt and is built for NumPy 1.x –
-    # NumPy 2 in the environment breaks it. Elsewhere (laptop, new Python versions) NumPy 2 is fine.
-    "numpy>=1.24,<2; sys_platform == 'linux' and (platform_machine == 'aarch64' or platform_machine == 'armv7l')",
-    "numpy>=1.24; sys_platform != 'linux' or (platform_machine != 'aarch64' and platform_machine != 'armv7l')",
+    "numpy>=1.24",  # on the Pi deploy/install.sh keeps the system NumPy (picamera2 is built for it)
     "opencv-python-headless>=4.8",  # on the Pi: sudo apt install python3-opencv
     "scipy>=1.10",
     "flask>=2.3",
@@ -63,7 +60,7 @@ ignore = [
     "N806",     # upper-case local names are conventional for matrices/images in image processing (H, W, K)
     "N812",     # "import methods as M" style module aliases
     "RUF001", "RUF002", "RUF003",  # ×, –, “ ” in UI texts and comments are intentional
-    "RUF046",   # int(round(x)) is needed: with NumPy < 2 (Raspberry Pi OS) round() of a NumPy float is a float
+    "RUF046",   # int(round(x)) is needed: with NumPy 1.x (Raspberry Pi OS Bookworm) round() of a NumPy float is a float
 ]
 
 [tool.ruff.lint.mccabe]

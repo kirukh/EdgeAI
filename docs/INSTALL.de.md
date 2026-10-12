@@ -1,16 +1,17 @@
 # Installation auf einem neuen Raspberry Pi – Schritt für Schritt
 
-Gilt für Version 2.1. Getestet ist das Installationsskript mit Python 3.11 (wie Raspberry Pi OS Bookworm),
-mit und ohne fehlende Pakete; der sudo-Weg (apt) konnte außerhalb eines echten Pi nicht getestet werden.
+Gilt ab Version 2.1.2. Getestet ist das Installationsskript ohne sudo mit Python 3.13 + NumPy 2.2 (wie Raspberry Pi OS
+**Trixie**) und Python 3.11 + NumPy 1.24 (wie **Bookworm**); der sudo-Weg (apt) konnte außerhalb eines echten Pi nicht
+getestet werden.
 
 ## 0. Was du brauchst
 
 | | |
 |---|---|
 | Hardware | Raspberry Pi 3 Model B (oder neuer), Camera Module v2 (IMX219), Netzteil 5,1 V / 2,5 A, microSD ≥ 16 GB |
-| Betriebssystem | Raspberry Pi OS **Bookworm** oder neuer (Desktop oder Lite, 32- oder 64-bit) |
+| Betriebssystem | Raspberry Pi OS **Trixie** oder **Bookworm** (Desktop oder Lite; 64-bit empfohlen) |
 | Netzwerk | Pi und Laptop/Tablet im selben Netz (WLAN oder LAN) |
-| Projekt | `EdgeAi_v2.1_learning.zip` (bzw. die neueste Version) |
+| Projekt | `EdgeAi_v2.1.2.zip` (bzw. die neueste Version) |
 
 Mit **sudo-Rechten** installiert das Skript fehlende Systempakete selbst. **Ohne sudo** muss nur die
 Kamera-Bibliothek `picamera2` vorhanden sein – auf Raspberry Pi OS ist sie normalerweise vorinstalliert; alles
@@ -19,7 +20,7 @@ andere installiert das Skript ohne sudo in eine eigene Python-Umgebung.
 ## 1. Pi vorbereiten (nur bei einem frischen Pi)
 
 1. **Kamera anschließen – Pi dabei ausgeschaltet.** Flachbandkabel: Kontakte zur richtigen Seite, Verriegelung zu.
-2. **Betriebssystem aufspielen** mit dem *Raspberry Pi Imager* auf dem Laptop: Gerät, Raspberry Pi OS (Bookworm)
+2. **Betriebssystem aufspielen** mit dem *Raspberry Pi Imager* auf dem Laptop: Gerät, Raspberry Pi OS (64-bit)
    und SD-Karte wählen. Unter *Einstellungen bearbeiten*: Hostname (z. B. `qc-pi`), Benutzer + Passwort,
    WLAN und **SSH aktivieren**.
 3. Pi starten und vom Laptop aus verbinden:
@@ -38,12 +39,12 @@ andere installiert das Skript ohne sudo in eine eigene Python-Umgebung.
 
 Auf dem **Laptop**, im Ordner mit der ZIP:
 ```bash
-scp EdgeAi_v2.1_learning.zip <benutzer>@<IP-des-Pi>:~
+scp EdgeAi_v2.1.2.zip <benutzer>@<IP-des-Pi>:~
 ```
 Auf dem **Pi**:
 ```bash
 cd ~
-unzip EdgeAi_v2.1_learning.zip          # → Ordner ~/pi_qc
+unzip EdgeAi_v2.1.2.zip                # → Ordner ~/pi_qc
 cd ~/pi_qc
 ```
 
@@ -56,11 +57,12 @@ bash deploy/install.sh --no-autostart
 Was du siehst (ohne sudo, ungefähr):
 ```
 == 1/5 Python and camera library
-   Python 3.11.2, picamera2 present
+   Python 3.13.5, picamera2 present
 == 2/5 Python environment .venv
 == 3/5 Python packages
    installing into .venv: opencv-python-headless scipy flask waitress  (ready-made packages only, a few minutes)
-   NumPy 1.26.4, OpenCV 4.11.0, SciPy 1.x, Flask 3.x
+   keeping the system NumPy 2.2.4 (picamera2 is built for it)
+   NumPy 2.2.4, OpenCV 4.x, SciPy 1.x, Flask 3.x
 == 4/5 Configuration
    Choose a PIN for the setup area (digits, e.g. 4711; empty = random): ____
    config.json created – setup PIN: 4711
@@ -77,7 +79,7 @@ Was das Skript tut – und warum:
 |---|---|---|
 | 1 | prüft Python ≥ 3.11 und `picamera2` | `picamera2` gibt es nur als Systempaket (apt), nicht über pip |
 | 2 | legt `.venv` mit `--system-site-packages` an | eigene Umgebung (ohne sudo), die trotzdem `picamera2` des Systems sieht |
-| 3 | installiert fehlende Pakete in `.venv` – nur fertige Pakete, **NumPy < 2** | `picamera2` ist für NumPy 1.x gebaut; NumPy 2 würde die Kamera zerstören. Kein stundenlanges Kompilieren auf dem Pi |
+| 3 | installiert fehlende Pakete in `.venv` – nur fertige Pakete, **NumPy bleibt die des Systems** | `picamera2` ist für die System-NumPy gebaut (Trixie 2.x, Bookworm 1.x); eine andere Hauptversion würde die Kamera zerstören. Kein stundenlanges Kompilieren auf dem Pi |
 | 4 | `config.json` aus der Vorlage für Pi 3 + Camera Module v2, fragt die PIN | passende Kamera-Einstellungen (voller Bildausschnitt, 640×480, 15 fps) |
 | 5 | Autostart – entfällt mit `--no-autostart` | siehe Abschnitt 8 |
 
@@ -163,7 +165,8 @@ Modelle, Ergebnisse, PIN und Python-Umgebung bleiben erhalten. Läuft alles, kan
 | `The camera library picamera2 is missing` | Systempaket fehlt. Mit sudo: `sudo apt install python3-picamera2`, sonst Administrator fragen |
 | `Python cannot create environments` | `sudo apt install python3-venv` (Administrator) |
 | `pip could not install …` | Kein fertiges Paket für diesen Pi. Administrator: `sudo apt install python3-opencv python3-scipy python3-flask python3-waitress`, dann Skript erneut starten |
-| `NumPy 2 is installed in .venv` | `.venv/bin/pip install "numpy<2"` |
+| `Could not find a version that satisfies the requirement numpy<2` | Alte Skriptversion (≤ 2.1.1) auf Trixie → ZIP ab 2.1.2 entpacken (`unzip -o`), Skript erneut starten |
+| `.venv uses NumPy …, the camera library is built for NumPy …` | `.venv/bin/pip uninstall -y numpy`, dann Skript erneut starten |
 | `Configuration error …` beim Start | Die Meldung nennt den falschen Eintrag in `config.json` |
 | `section "self_learning" … is ignored` | Nur ein Hinweis (Konfiguration einer älteren Version) – kann bleiben |
 | Keine Kamera / schwarzes Bild | Pi aus, Kabel prüfen; `rpicam-hello --list-cameras` (Programm vorher stoppen) |
@@ -179,7 +182,7 @@ Zum Verständnis – das Skript macht im Kern genau das:
 cd ~/pi_qc
 python3 -m venv --system-site-packages .venv        # Umgebung, die picamera2 des Systems sieht
 .venv/bin/pip install --upgrade pip
-.venv/bin/pip install -e .                          # Abhängigkeiten aus pyproject.toml; auf dem Pi automatisch NumPy < 2
+.venv/bin/pip install -e . "numpy==$(python3 -c 'import numpy; print(numpy.__version__)')"   # NumPy des Systems behalten
 cp config.pi3_imx219.json config.json               # danach "setup_pin" in config.json ändern
 .venv/bin/qc web --camera pi
 ```

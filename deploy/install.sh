@@ -11,7 +11,8 @@
 #      pre-installed on Raspberry Pi OS). With sudo the system packages are installed via apt.
 #   2. creates the Python environment .venv – with access to the system packages (picamera2)
 #   3. installs what is still missing into .venv with pip (no sudo needed): OpenCV, SciPy, Flask,
-#      waitress – with NumPy < 2, because picamera2 of the system is built for NumPy 1.x.
+#      waitress – NumPy stays the system version, because picamera2 is built for it
+#      (Bookworm: NumPy 1.x, Trixie: NumPy 2.x).
 #      Only ready-made packages are used (never hours of compiling on the Pi).
 #   4. creates config.json from the Raspberry Pi 3 + Camera Module v2 preset and asks for the setup PIN
 #   5. autostart (unless --no-autostart): sudo → system service; without → user service or crontab
@@ -26,7 +27,7 @@ for arg in "$@"; do
   case "$arg" in
     --no-autostart) NO_AUTOSTART=1 ;;
     --no-camera) NO_CAMERA=1 ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
     *) echo "Unknown option: $arg (see --help)"; exit 2 ;;
   esac
 done
@@ -67,37 +68,46 @@ PY="$DIR/.venv/bin/python"
 "$PY" -m pip install -q --upgrade pip 2>/dev/null || true
 
 echo "== 3/5 Python packages"
+# NumPy: the system's NumPy is the one picamera2 is built for (Bookworm: 1.x, Trixie: 2.x).
+# .venv keeps exactly this version – pip may only choose OpenCV/SciPy versions that fit it.
+SYS_NUMPY="$("$PYTHON" -c 'import numpy; print(numpy.__version__)' 2>/dev/null || true)"
+VENV_NUMPY="$("$PY" -c 'import numpy; print(numpy.__version__, numpy.__file__)' 2>/dev/null || true)"
+if [ -n "$SYS_NUMPY" ] && [[ "$VENV_NUMPY" == *"$DIR/.venv/"* ]] && [ "${VENV_NUMPY%% *}" != "$SYS_NUMPY" ]; then
+  echo "   removing NumPy ${VENV_NUMPY%% *} from .venv – it hides the system NumPy $SYS_NUMPY"
+  "$PY" -m pip uninstall -q -y numpy
+fi
+NUMPY_PIN=()
+[ -n "$SYS_NUMPY" ] && NUMPY_PIN=("numpy==$SYS_NUMPY")
 MISSING=()
 for pair in cv2:opencv-python-headless scipy:scipy flask:flask waitress:waitress numpy:numpy; do
   "$PY" -c "import ${pair%%:*}" 2>/dev/null || MISSING+=("${pair##*:}")
 done
-NUMPY_LIMIT=()
-if [ $NO_CAMERA = 0 ]; then
-  NUMPY_LIMIT=("numpy<2")   # picamera2 (system) is built for NumPy 1.x – NumPy 2 breaks the camera
-fi
 if [ ${#MISSING[@]} -gt 0 ]; then
   echo "   installing into .venv: ${MISSING[*]}  (ready-made packages only, a few minutes)"
-  "$PY" -m pip install -q --only-binary=numpy,scipy,opencv-python-headless "${MISSING[@]}" "${NUMPY_LIMIT[@]}" \
-    || fail "pip could not install ${MISSING[*]}. If there is no ready-made package for this Pi, ask an administrator:
+  [ -n "$SYS_NUMPY" ] && echo "   keeping the system NumPy $SYS_NUMPY (picamera2 is built for it)"
+  "$PY" -m pip install -q --only-binary=numpy,scipy,opencv-python-headless "${MISSING[@]}" "${NUMPY_PIN[@]}" \
+    || fail "pip could not install ${MISSING[*]} as ready-made packages for this Pi
+   ($("$PYTHON" --version), $(uname -m)${SYS_NUMPY:+, system NumPy $SYS_NUMPY}). Ask an administrator:
      sudo apt install python3-opencv python3-scipy python3-flask python3-waitress
-   and run this script again. (Details: uname -m → $(uname -m), $("$PYTHON" --version))"
+   and run this script again."
 else
   echo "   all packages present"
 fi
 # registers the project in .venv (command "qc"); the code stays here – a new version just replaces the folder
 "$PY" -m pip install -q --no-deps -e . 2>/dev/null \
   || echo "   (command 'qc' not installed – start with: .venv/bin/python main.py …)"
-"$PY" - "$NO_CAMERA" <<'PY' || fail "The Python environment is not usable (see the message above)."
+"$PY" - "$NO_CAMERA" "$SYS_NUMPY" <<'PY' || fail "The Python environment is not usable (see the message above)."
 import sys
 from importlib.metadata import version
 import cv2, flask, numpy, scipy, waitress  # noqa: F401
 import scipy.optimize  # noqa: F401 - used by the program; fails if SciPy and NumPy do not fit together
 print(f"   NumPy {numpy.__version__}, OpenCV {cv2.__version__}, SciPy {scipy.__version__}, Flask {version('flask')}")
-if sys.argv[1] == "0":
+no_camera, sys_numpy = sys.argv[1], sys.argv[2]
+if no_camera == "0":
     import picamera2  # noqa: F401
-    if int(numpy.__version__.split(".")[0]) >= 2:
-        sys.exit("   NumPy 2 is installed in .venv – the camera library needs NumPy 1.x. Fix:\n"
-                 "     .venv/bin/pip install 'numpy<2'")
+    if sys_numpy and numpy.__version__.split(".")[0] != sys_numpy.split(".")[0]:
+        sys.exit(f"   .venv uses NumPy {numpy.__version__}, the camera library is built for NumPy {sys_numpy}. Fix:\n"
+                 "     .venv/bin/pip uninstall -y numpy   and run this script again")
 PY
 
 echo "== 4/5 Configuration"

@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.1.2 – Raspberry Pi OS Trixie (2026-10-12)
+
+- `deploy/install.sh`: no fixed `numpy<2` any more. On Raspberry Pi OS Trixie (Debian 13, Python 3.13) `picamera2`
+  is built for NumPy 2 and NumPy 1.x does not exist for Python 3.13 – pip failed with *Could not find a version that
+  satisfies the requirement numpy<2*. The installer now pins the NumPy version of the system (`numpy==<system>`,
+  Bookworm 1.x, Trixie 2.x), so pip only picks OpenCV/SciPy versions that fit it. A NumPy inside `.venv` that hides
+  the system NumPy is removed; the final check compares the major version with the system's.
+- `pyproject.toml`: plain `numpy>=1.24` (the ARM marker `<2` was wrong for Trixie).
+- Tested: failure reproduced with Python 3.13 + system NumPy 2.2.4 (as on the Pi); fixed installer on the same
+  state → NumPy 2.2.4 kept, OpenCV, SciPy, Flask, waitress installed, `qc` registered, `config.json` valid.
+
 ## 2.1.1 – installation without sudo (2026-10-12)
 
 - `deploy/install.sh`: without sudo, missing packages (OpenCV, SciPy, Flask, waitress) are installed into `.venv`

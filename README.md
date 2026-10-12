@@ -240,20 +240,23 @@ The script works **with or without sudo rights** and can be run again at any tim
 | Step | with sudo | without sudo |
 |---|---|---|
 | Camera library `picamera2` | installed via apt | must be present (pre-installed on Raspberry Pi OS) |
-| OpenCV, SciPy, Flask, waitress | installed via apt | installed into `.venv` with pip – ready-made packages only, NumPy < 2 |
+| OpenCV, SciPy, Flask, waitress | installed via apt | installed into `.venv` with pip – ready-made packages only; NumPy stays the system version |
 | Python environment `.venv` | with access to the system packages (`--system-site-packages`) | same |
 | `config.json` | from the Pi 3 + Camera Module v2 preset, asks for the setup PIN | same |
 | Autostart (unless `--no-autostart`) | system service `qc` | user service `qc` (fallback: `crontab @reboot`) |
 
-**Why NumPy < 2 on the Pi:** `picamera2` comes from apt and is built for NumPy 1.x; NumPy 2 in the environment breaks
-the camera. `pyproject.toml` limits NumPy on ARM Linux accordingly, so `pip install -e .` is safe there as well.
+**Why the system NumPy:** `picamera2` comes from apt and is built for the NumPy of the operating system – NumPy 1.x on
+Raspberry Pi OS Bookworm (Python 3.11), NumPy 2.x on Trixie (Python 3.13). A different NumPy major version in the
+environment breaks the camera, and a fixed limit such as `numpy<2` cannot be installed on Trixie at all (there is no
+NumPy 1.x for Python 3.13). The installer therefore pins `numpy==<system version>`, so pip only picks OpenCV/SciPy
+versions that fit it. By hand: `.venv/bin/pip install -e . "numpy==$(python3 -c 'import numpy; print(numpy.__version__)')"`.
 
 **Updating** (keeps models, results, configuration and the Python environment):
 
 ```bash
 systemctl --user stop qc 2>/dev/null; sudo systemctl stop qc 2>/dev/null   # whichever autostart is used
 mv ~/pi_qc ~/pi_qc_old                                       # keep the old version as a backup
-unzip EdgeAi_v2.1.zip -d ~                                   # → ~/pi_qc (same path, so the autostart still works)
+unzip EdgeAi_v2.1.2.zip -d ~                                  # → ~/pi_qc (same path, so the autostart still works)
 mv ~/pi_qc_old/data ~/pi_qc_old/config.json ~/pi_qc_old/.venv ~/pi_qc/
 cd ~/pi_qc && bash deploy/install.sh --no-autostart          # installs what the new version needs
 ```
@@ -365,7 +368,7 @@ tests/                     pytest – 72 tests, incl. complete web workflows wit
 | Tests + coverage | pytest, pytest-cov | `pytest --cov` | ✓ 72 tests, 91 % |
 
 All rules are configured in `pyproject.toml`; the exceptions are commented there (e.g. upper-case `H, W, K` for
-matrices in image processing, and `int(round(x))`, which is needed with NumPy < 2 on Raspberry Pi OS).
+matrices in image processing, and `int(round(x))`, which is needed with NumPy 1.x on Raspberry Pi OS Bookworm).
 
 Design principles: **one responsibility per module** (the former 700-line `QCSystem` with three mixins is now a
 coordinator plus small components), **composition instead of mixins**, **pure functions where possible**
