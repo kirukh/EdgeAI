@@ -225,31 +225,41 @@ field of view; the zoom of a part type is taken into account automatically. Abso
 
 ## Running on the Raspberry Pi
 
-**Installation (once)** – Raspberry Pi OS (Bookworm or newer), project unzipped e.g. to `~/pi_qc`:
+**Installation (once)** – Raspberry Pi OS (Bookworm or newer), project unzipped e.g. to `~/pi_qc`. Step-by-step
+guide in German: [`docs/INSTALL.de.md`](docs/INSTALL.de.md).
 
 ```bash
 cd ~/pi_qc
 bash deploy/install.sh                  # with autostart
 bash deploy/install.sh --no-autostart   # start by hand
+bash deploy/install.sh --no-camera      # laptop: simulator / image folders only
 ```
 
-The script works **with or without sudo rights**: with sudo it installs the system packages and a system service
-`qc`; without sudo it checks that the packages are present, installs waitress into `.venv` and sets up a user
-service (fallback: `crontab @reboot`). It creates `config.json` from the Raspberry Pi 3 + Camera Module v2 preset
-and asks for the setup PIN. Open the UI on a laptop/tablet/phone: `http://<IP of the Pi>:8000`.
+The script works **with or without sudo rights** and can be run again at any time:
 
-**Updating from version 1** (keeps models, results, configuration and the Python environment):
+| Step | with sudo | without sudo |
+|---|---|---|
+| Camera library `picamera2` | installed via apt | must be present (pre-installed on Raspberry Pi OS) |
+| OpenCV, SciPy, Flask, waitress | installed via apt | installed into `.venv` with pip – ready-made packages only, NumPy < 2 |
+| Python environment `.venv` | with access to the system packages (`--system-site-packages`) | same |
+| `config.json` | from the Pi 3 + Camera Module v2 preset, asks for the setup PIN | same |
+| Autostart (unless `--no-autostart`) | system service `qc` | user service `qc` (fallback: `crontab @reboot`) |
+
+**Why NumPy < 2 on the Pi:** `picamera2` comes from apt and is built for NumPy 1.x; NumPy 2 in the environment breaks
+the camera. `pyproject.toml` limits NumPy on ARM Linux accordingly, so `pip install -e .` is safe there as well.
+
+**Updating** (keeps models, results, configuration and the Python environment):
 
 ```bash
 systemctl --user stop qc 2>/dev/null; sudo systemctl stop qc 2>/dev/null   # whichever autostart is used
-mv ~/pi_qc ~/pi_qc_v1                                        # keep version 1 as a backup
-unzip EdgeAi_v2_core.zip -d ~                                # → ~/pi_qc (same path, so the autostart still works)
-mv ~/pi_qc_v1/data ~/pi_qc_v1/config.json ~/pi_qc_v1/.venv ~/pi_qc/
-cd ~/pi_qc && .venv/bin/python main.py web --camera pi       # or start the service again
+mv ~/pi_qc ~/pi_qc_old                                       # keep the old version as a backup
+unzip EdgeAi_v2.1.zip -d ~                                   # → ~/pi_qc (same path, so the autostart still works)
+mv ~/pi_qc_old/data ~/pi_qc_old/config.json ~/pi_qc_old/.venv ~/pi_qc/
+cd ~/pi_qc && bash deploy/install.sh --no-autostart          # installs what the new version needs
 ```
 
-Models of version 1 keep working; teaching them in again is recommended (reference screening). The start-up log
-lists config sections of version 1 that are now ignored (e.g. `self_learning`).
+Models of older versions keep working; teaching them in again is recommended (reference screening, learned
+tolerances). The start-up log lists config sections of version 1 that are now ignored (e.g. `self_learning`).
 
 | Task | with sudo | without sudo |
 |---|---|---|

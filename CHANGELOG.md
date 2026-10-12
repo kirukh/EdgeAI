@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.1.1 – installation without sudo (2026-10-12)
+
+- `deploy/install.sh`: without sudo, missing packages (OpenCV, SciPy, Flask, waitress) are installed into `.venv`
+  with pip – ready-made packages only (no compiling on the Pi) and NumPy < 2, because `picamera2` from apt is built
+  for NumPy 1.x. Clear messages for a missing `picamera2` or `python3-venv`; final check imports the modules the
+  program really uses. New option `--no-camera` (laptop/simulator). Registers the command `qc` (`pip install -e .`).
+  Can be run again at any time (also after an update).
+- `pyproject.toml`: NumPy < 2 on ARM Linux (Raspberry Pi) via environment markers, so `pip install -e .` is safe there.
+- `docs/INSTALL.de.md`: step-by-step installation guide (German).
+- Tested: installer with Python 3.11 + system NumPy 1.24 without sudo (→ NumPy 1.26, OpenCV 4.11), second run,
+  missing `picamera2`, laptop mode; all 72 tests pass on Python 3.11 + NumPy 1.26 + OpenCV 4.11 as on the Pi.
+
 ## 2.1.0 – continuous improvement (2026-10-12)
 
 Requirement of the supervising professor: the model must improve during operation. Implemented as controlled
