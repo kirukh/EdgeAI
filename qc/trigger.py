@@ -1,4 +1,5 @@
 """Conveyor trigger: fires exactly one capture per part."""
+
 from __future__ import annotations
 
 from dataclasses import replace
@@ -6,7 +7,7 @@ from dataclasses import replace
 import cv2
 import numpy as np
 
-from .alignment import detect_part, resize_to_width, to_gray
+from .alignment import PartDetection, detect_part, resize_to_width, to_gray
 from .config import LocalizationConfig, TriggerConfig
 
 
@@ -20,7 +21,7 @@ class PartTrigger:
         self.armed = True
         self.prev_pos: float | None = None
         self.misses = 0
-        self.last_det = None
+        self.last_det: PartDetection | None = None
         self.scale = 1.0
 
     def update(self, frame: np.ndarray) -> bool:
@@ -31,14 +32,14 @@ class PartTrigger:
         axis = 0 if self.cfg.axis == "x" else 1
         size = small.shape[1 - axis]
         pos = det.centroid[axis] / size - 0.5 if det is not None else None
-        in_band = pos is not None and abs(pos) < self.cfg.center_band_ratio
 
         fire = False
-        if in_band and det.complete:
+        if det is not None and pos is not None and abs(pos) < self.cfg.center_band_ratio and det.complete:
             self.misses = 0
-            if self.armed and self.prev_pos is not None:
-                crossed = np.sign(pos) != np.sign(self.prev_pos) or abs(pos) < 0.01
-                still = abs(pos - self.prev_pos) < 0.002
+            prev = self.prev_pos
+            if self.armed and prev is not None:
+                crossed = np.sign(pos) != np.sign(prev) or abs(pos) < 0.01
+                still = abs(pos - prev) < 0.002
                 if crossed or still:
                     fire = True
                     self.armed = False

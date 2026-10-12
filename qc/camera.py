@@ -7,10 +7,14 @@ Supported sources (``CameraConfig.source``):
 * ``folder:<path>`` – plays back images from a folder (offline tests with real photos)
 * ``sim``           – simulated conveyor with synthetic parts
 """
+
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
+from typing import Any
 
 import cv2
 import numpy as np
@@ -25,7 +29,7 @@ class CameraSource:
 
     name = "base"
     info = ""
-    last_age_s = 0.0          # age of the last frame returned by read() (sensor exposure → now)
+    last_age_s = 0.0  # age of the last frame returned by read() (sensor exposure → now)
     # Sources with real parts moving on a conveyor → the trigger decides when to capture
     continuous = True
 
@@ -37,10 +41,10 @@ class CameraSource:
 
     # ---- camera controls for the automatic camera setup (qc/autosetup.py) ----
     # Sources that cannot be controlled (USB, image folder) keep these defaults.
-    can_control = False          # exposure / gain / crop can be set by software
-    has_autofocus = False        # focus motor (e.g. Camera Module 3)
-    crop = (0.0, 0.0, 1.0, 1.0)  # current sensor crop (x, y, w, h as fractions of the sensor)
-    last_metadata: dict = {}
+    can_control = False  # exposure / gain / crop can be set by software
+    has_autofocus = False  # focus motor (e.g. Camera Module 3)
+    crop: tuple[float, ...] = (0.0, 0.0, 1.0, 1.0)  # current sensor crop (x, y, w, h as fractions of the sensor)
+    last_metadata: Mapping[str, Any] = MappingProxyType({})  # read-only default; sources set their own
 
     def set_exposure(self, exposure_us: int, gain: float) -> None:
         raise NotImplementedError
@@ -82,17 +86,23 @@ class PiCameraSource(CameraSource):
         try:
             config = self.cam.create_video_configuration(
                 main={"size": (cfg.width, cfg.height), "format": "RGB888"},
-                controls={"FrameRate": cfg.fps}, queue=False, **kwargs)
-        except TypeError:          # older picamera2 without the "sensor" argument
+                controls={"FrameRate": cfg.fps},
+                queue=False,
+                **kwargs,
+            )
+        except TypeError:  # older picamera2 without the "sensor" argument
             config = self.cam.create_video_configuration(
-                main={"size": (cfg.width, cfg.height), "format": "RGB888"}, controls={"FrameRate": cfg.fps})
+                main={"size": (cfg.width, cfg.height), "format": "RGB888"}, controls={"FrameRate": cfg.fps}
+            )
         self.cam.configure(config)
         self.has_autofocus = "AfMode" in self.cam.camera_controls
         controls: dict = {}
         if cfg.exposure_us > 0:
             # Fixed exposure + gain → reproducible brightness.
             # A short exposure time reduces motion blur on the conveyor.
-            controls.update({"AeEnable": False, "ExposureTime": int(cfg.exposure_us), "AnalogueGain": float(cfg.analogue_gain)})
+            controls.update(
+                {"AeEnable": False, "ExposureTime": int(cfg.exposure_us), "AnalogueGain": float(cfg.analogue_gain)}
+            )
         if cfg.lock_white_balance:
             controls.update({"AwbEnable": False, "ColourGains": tuple(cfg.colour_gains)})
         if controls:
@@ -100,20 +110,21 @@ class PiCameraSource(CameraSource):
         self.cam.start()
         time.sleep(0.5)
         self.sensor_info = self._describe(cfg)
-        self.info = self.sensor_info + ("" if self.has_autofocus else
-                                        ", fixed-focus lens (focus by turning the lens – use the focus assistant)")
-        if self.has_autofocus:        # camera with autofocus (e.g. Camera Module 3)
+        self.info = self.sensor_info + (
+            "" if self.has_autofocus else ", fixed-focus lens (focus by turning the lens – use the focus assistant)"
+        )
+        if self.has_autofocus:  # camera with autofocus (e.g. Camera Module 3)
             try:
                 if cfg.lens_position is None:
-                    self.cam.set_controls({"AfMode": 1})         # auto: one focus run, then the lens stays
+                    self.cam.set_controls({"AfMode": 1})  # auto: one focus run, then the lens stays
                     self.cam.autofocus_cycle()
                 else:
-                    self.cam.set_controls({"AfMode": 0, "LensPosition": float(cfg.lens_position)})   # manual
+                    self.cam.set_controls({"AfMode": 0, "LensPosition": float(cfg.lens_position)})  # manual
                     time.sleep(0.3)
                 pos = self.cam.capture_metadata().get("LensPosition")
                 if pos:
                     self.info += f", focus fixed at {pos:.2f} dioptres (≈ {100 / pos:.0f} cm)"
-            except Exception as e:  # noqa: BLE001 - focus problems must not stop the system
+            except Exception as e:
                 self.info += f", focus could not be set: {e}"
 
     def _describe(self, cfg: CameraConfig) -> str:
@@ -126,12 +137,14 @@ class PiCameraSource(CameraSource):
             mode = sensor.get("output_size") if isinstance(sensor, dict) else getattr(sensor, "output_size", None)
             full = props.get("PixelArraySize")
             text = f"sensor {model}" + (f", readout {mode[0]}×{mode[1]}" if mode else "")
-            crop = self.cam.capture_metadata().get("ScalerCrop")       # (x, y, w, h) on the pixel array
+            crop = self.cam.capture_metadata().get("ScalerCrop")  # (x, y, w, h) on the pixel array
             if crop and full and crop[2] < 0.9 * full[0]:
-                text += (f" – field of view CROPPED to {crop[2]}×{crop[3]} of {full[0]}×{full[1]} "
-                         "(set camera.sensor_mode, e.g. [1640, 1232] for the IMX219)")
+                text += (
+                    f" – field of view CROPPED to {crop[2]}×{crop[3]} of {full[0]}×{full[1]} "
+                    "(set camera.sensor_mode, e.g. [1640, 1232] for the IMX219)"
+                )
             return text + f", output {cfg.width}×{cfg.height}"
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return f"sensor info unavailable ({e})"
 
     # ---- controls (applied by libcamera a few frames later; the caller waits for new frames) ----
@@ -139,8 +152,8 @@ class PiCameraSource(CameraSource):
 
     def _crop_max(self):
         try:
-            return tuple(self.cam.camera_controls["ScalerCrop"][1])          # (min, max, default)
-        except Exception:  # noqa: BLE001
+            return tuple(self.cam.camera_controls["ScalerCrop"][1])  # (min, max, default)
+        except Exception:
             w, h = self.cam.camera_properties.get("PixelArraySize", (0, 0))
             return 0, 0, w, h
 
@@ -168,24 +181,25 @@ class PiCameraSource(CameraSource):
 
     def set_lens(self, position: float) -> None:
         if self.has_autofocus and position is not None:
-            self.cam.set_controls({"AfMode": 0, "LensPosition": float(position)})       # 0 = manual
+            self.cam.set_controls({"AfMode": 0, "LensPosition": float(position)})  # 0 = manual
 
     def af_start(self, window) -> None:
         """Autofocus run on the part only (window = x, y, w, h as fractions of the current crop)."""
         if not self.has_autofocus:
             return
         cx, cy, cw, ch = self.crop
-        mx, my, mw, mh = self._crop_max()
+        _, _, mw, mh = self._crop_max()
         # AfWindows are given relative to the ScalerCropMaximum rectangle
         x, y, w, h = window
         rect = (int((cx + x * cw) * mw), int((cy + y * ch) * mh), int(w * cw * mw), int(h * ch * mh))
-        self.cam.set_controls({"AfMode": 1, "AfMetering": 1, "AfWindows": [rect]})   # auto, windows
-        self.cam.set_controls({"AfTrigger": 0})                                       # start
+        self.cam.set_controls({"AfMode": 1, "AfMetering": 1, "AfWindows": [rect]})  # auto, windows
+        self.cam.set_controls({"AfTrigger": 0})  # start
 
     def af_state(self) -> tuple[str, float | None]:
         st = self.last_metadata.get("AfState")
         pos = self.last_metadata.get("LensPosition")
-        return {2: "focused", 3: "failed"}.get(st, "scanning"), (float(pos) if pos is not None else None)
+        state = {2: "focused", 3: "failed"}.get(st, "scanning") if isinstance(st, int) else "scanning"
+        return state, (float(pos) if pos is not None else None)
 
     def read(self):
         # picamera2 "RGB888" delivers BGR byte order – matches OpenCV directly.
@@ -199,7 +213,7 @@ class PiCameraSource(CameraSource):
         finally:
             req.release()
         self.last_age_s = max(0.0, (time.monotonic_ns() - ts) / 1e9) if ts else 0.0
-        if self.last_age_s > 1.0:            # clock domains differ – do not trust it
+        if self.last_age_s > 1.0:  # clock domains differ – do not trust it
             self.last_age_s = 0.0
         return frame
 
@@ -267,14 +281,11 @@ class FolderSource(CameraSource):
 
 
 class SimulatorSource(CameraSource):
-    """Simulated conveyor: parts move through the image from left to right.
-
-    Also simulates switchable lighting (front light/backlight, for dual-light mode)
-    and can show a checkerboard for testing the camera calibration.
-    """
+    """Simulated conveyor: parts move through the image from left to right (front light or
+    backlight, simulated exposure, zoom and focus for the automatic camera setup)."""
 
     name = "Simulator"
-    MM_PER_PX = 0.25          # simulated scale at 640 px image width (plate A ≈ 75 × 42 mm)
+    MM_PER_PX = 0.25  # simulated scale at 640 px image width (plate A ≈ 75 × 42 mm)
 
     def __init__(self, cfg: CameraConfig, seed: int | None = None):
         from . import synthetic
@@ -283,20 +294,18 @@ class SimulatorSource(CameraSource):
         self.cfg = cfg
         self.rng = np.random.default_rng(seed)
         self.size = (min(cfg.width, 960), int(min(cfg.width, 960) * cfg.height / cfg.width))
-        self.light = cfg.sim_lighting             # lighting currently switched on
+        self.light = cfg.sim_lighting  # lighting currently switched on
         self._backgrounds: dict[str, np.ndarray] = {}
         self.part_type = cfg.sim_part_type
         self.defect_rate = cfg.sim_defect_rate
-        self.force_good = False
-        self.force_defect = False                 # self-test: next parts are defective
-        self.board: dict | None = None            # checkerboard for calibration tests
+        self.force_good = False  # teach-in: only good parts on the belt
         # simulated camera controls (brightness ∝ exposure × gain, nominal = 4000 µs × 1.0)
-        self.exposure = (cfg.exposure_us or 4000, cfg.analogue_gain)
+        self.exposure: tuple[float, float] = (float(cfg.exposure_us or 4000), cfg.analogue_gain)
         self.crop = (0.0, 0.0, 1.0, 1.0)
         self.has_autofocus = bool(cfg.sim_autofocus)
         self.defocus = float(cfg.sim_defocus)
-        self.hold = False                          # part lies still in the middle (camera setup)
-        self._af = None
+        self.hold = False  # part lies still in the middle (camera setup)
+        self._af: int | None = None  # frames until the simulated autofocus run is finished
         self.last_metadata = {}
         self._spawn()
         self.last_time = 0.0
@@ -306,12 +315,16 @@ class SimulatorSource(CameraSource):
             self._backgrounds[light] = self.syn.belt_background(self.size, light, self.rng)
         return self._backgrounds[light]
 
+    def respawn(self) -> None:
+        """Next part (e.g. after a simulator setting changed)."""
+        self._spawn()
+
     def _spawn(self):
         defect = None
-        if self.force_defect or (not self.force_good and self.rng.random() < self.defect_rate):
+        if not self.force_good and self.rng.random() < self.defect_rate:
             defect = str(self.rng.choice(self.syn.DEFECTS))
         self.part = self.syn.make_part(self.part_type, defect, self.rng)
-        self._layers: dict[str, tuple] = {}
+        self._layers: dict[tuple[str, float], tuple] = {}
         self.x = -200.0
         self.y = 240 + self.rng.uniform(-25, 25)
         if self.cfg.sim_any_angle:
@@ -323,8 +336,9 @@ class SimulatorSource(CameraSource):
     def _layer(self, light: str):
         key = (light, self.crop[2])
         if key not in self._layers:
-            self._layers[key] = self.syn.render_layers(self.part, light,
-                                                       self.size[0] / 640.0 / self.crop[2] * self.cfg.sim_part_scale)
+            self._layers[key] = self.syn.render_layers(
+                self.part, light, self.size[0] / 640.0 / self.crop[2] * self.cfg.sim_part_scale
+            )
         return self._layers[key]
 
     # ---- simulated camera controls ----
@@ -346,7 +360,7 @@ class SimulatorSource(CameraSource):
 
     def af_start(self, window) -> None:
         if self.has_autofocus:
-            self._af = 4                           # "scanning" for a few frames
+            self._af = 4  # "scanning" for a few frames
 
     def af_state(self) -> tuple[str, float | None]:
         if not self.has_autofocus:
@@ -369,58 +383,10 @@ class SimulatorSource(CameraSource):
         return self.part.defect
 
     def set_lighting(self, lighting: str):
-        """Simulator setting (UI): lighting used in single-light mode."""
+        """Simulator setting (UI): front light or backlight."""
         self.cfg.sim_lighting = lighting
         self.light = lighting
         self._spawn()
-
-    def switch_light(self, light: str):
-        """Called by the light controller (dual-light mode): same part, other lighting."""
-        if light in ("front", "back"):
-            self.light = light
-
-    def show_board(self, cols: int = 9, rows: int = 6, square_mm: float = 10.0):
-        """Show a checkerboard at a new random pose (calibration test)."""
-        # 1st board lies flat on the belt; later ones are tilted (like a user would hold it)
-        tilt = 0.0 if self.board is None and not getattr(self, "_boards_shown", 0) else 0.22
-        self._boards_shown = getattr(self, "_boards_shown", 0) + 1
-        self.board = {"cols": cols, "rows": rows, "square_mm": square_mm, "seed": int(self.rng.integers(1 << 30)),
-                      "tilt": tilt}
-
-    def hide_board(self):
-        self.board = None
-
-    def _render_board(self) -> np.ndarray:
-        b = self.board
-        rng = np.random.default_rng(b["seed"])
-        scale = self.size[0] / 640.0
-        sq = b["square_mm"] / self.MM_PER_PX * scale
-        nx, ny = b["cols"] + 1, b["rows"] + 1
-        board = np.full((int(ny * sq) + 2, int(nx * sq) + 2), 255, np.uint8)
-        for j in range(ny):
-            for i in range(nx):
-                if (i + j) % 2 == 0:
-                    cv2.rectangle(board, (int(i * sq), int(j * sq)), (int((i + 1) * sq) - 1, int((j + 1) * sq) - 1), 0, -1)
-        h, w = board.shape
-        src = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
-        cx, cy = self.size[0] / 2 + rng.uniform(-30, 30) * scale, self.size[1] / 2 + rng.uniform(-20, 20) * scale
-        ang = np.radians(rng.uniform(-12, 12))
-        rot = np.array([[np.cos(ang), -np.sin(ang)], [np.sin(ang), np.cos(ang)]])
-        corners = (src - [w / 2, h / 2]) @ rot.T + [cx, cy]
-        # perspective of a tilted plane: one side nearer (larger) than the other
-        t = b.get("tilt", 0.0)
-        if t:
-            ax = rng.uniform(0, 2 * np.pi)
-            d = np.array([np.cos(ax), np.sin(ax)])
-            rel = corners - corners.mean(0)
-            k = (rel @ d) / (np.abs(rel @ d).max() + 1e-9)          # −1 … 1 along the tilt axis
-            corners = corners.mean(0) + rel * (1 + t * k)[:, None]
-        corners += rng.uniform(-2, 2, corners.shape) * scale
-        H = cv2.getPerspectiveTransform(src, corners.astype(np.float32))
-        img = cv2.warpPerspective(board, H, self.size, borderValue=90)
-        img = cv2.GaussianBlur(img, (0, 0), 0.7)
-        noise = self.rng.normal(0, 2, img.shape)
-        return cv2.cvtColor(np.clip(img + noise, 0, 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
 
     def read(self):
         # Limit the frame rate so the simulator does not max out the CPU
@@ -428,8 +394,6 @@ class SimulatorSource(CameraSource):
         if wait > 0:
             time.sleep(wait)
         self.last_time = time.time()
-        if self.board is not None:
-            return self._render_board()
         if self._af:
             self._af -= 1
             if not self._af:
@@ -439,9 +403,16 @@ class SimulatorSource(CameraSource):
         if self.x > 840 + self.gap * self.cfg.sim_speed_px:
             self._spawn()
         cx, cy, f = self.crop[0] * 640.0, self.crop[1] * 480.0, self.crop[2]
-        pose = ((self.x - cx) / f, (self.y - cy) / f, self.angle)          # world → zoomed output
-        img = self.syn.compose(self.part, pose, self.light, self.size, self.rng,
-                               layers=self._layer(self.light), background=self._background(self.light))
+        pose = ((self.x - cx) / f, (self.y - cy) / f, self.angle)  # world → zoomed output
+        img = self.syn.compose(
+            self.part,
+            pose,
+            self.light,
+            self.size,
+            self.rng,
+            layers=self._layer(self.light),
+            background=self._background(self.light),
+        )
         k = self.exposure[0] * self.exposure[1] / self.NOMINAL
         if abs(k - 1.0) > 1e-3:
             img = np.clip(img.astype(np.float32) * k, 0, 255).astype(np.uint8)

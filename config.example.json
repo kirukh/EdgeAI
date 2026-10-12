@@ -13,6 +13,7 @@
     ],
     "lens_position": null,
     "sensor_mode": null,
+    "mm_per_px": null,
     "sim_lighting": "front",
     "sim_part_type": "A",
     "sim_any_angle": false,
@@ -56,6 +57,9 @@
     "outline_min_area_px": 80,
     "pos_tol_mm": null,
     "dia_tol_mm": null,
+    "screen_references": true,
+    "screen_k": 5.0,
+    "screen_max_ratio": 0.25,
     "decision": "fusion",
     "geometry_standalone": 1.0,
     "diff_standalone": 1.0,
@@ -77,40 +81,10 @@
     "save_nok_images": true,
     "history_size": 50
   },
-  "lighting": {
-    "mode": "single",
-    "idle_light": "front",
-    "settle_frames": 2,
-    "back_methods": [
-      "geometry"
-    ],
-    "front_methods": null
-  },
   "inspection": {
     "shots_per_part": 3,
     "confirm_margin": 0.5,
     "tie_is_nok": true
-  },
-  "self_learning": {
-    "enabled": true,
-    "auto": true,
-    "auto_every": 30,
-    "margin": 0.5,
-    "max_pool": 100,
-    "max_references": 80,
-    "growth_limit": 0.3
-  },
-  "io": {
-    "enabled": false,
-    "active_high": true,
-    "reject_pin": null,
-    "reject_delay_ms": 500,
-    "reject_pulse_ms": 150,
-    "ok_lamp_pin": null,
-    "nok_lamp_pin": null,
-    "lamp_ms": 800,
-    "front_light_pin": null,
-    "back_light_pin": null
   },
   "drift": {
     "window": 20,
@@ -119,11 +93,11 @@
     "area_tol": 0.03,
     "sharpness_tol": 0.25
   },
-  "calibration": {
-    "file": "data/calibration.json",
-    "board_cols": 9,
-    "board_rows": 6,
-    "square_mm": 10.0
+  "learning": {
+    "enabled": true,
+    "update_after": 5,
+    "max_waiting": 100,
+    "max_known_bad": 100
   },
   "ui": {
     "setup_pin": "1234",

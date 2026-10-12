@@ -1,0 +1,79 @@
+[project]
+name = "pi-qc"
+version = "2.1.0"
+description = "Camera-based OK/NOK inspection of metal parts on a conveyor (Raspberry Pi)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.24",
+    "opencv-python-headless>=4.8",  # on the Pi: sudo apt install python3-opencv
+    "scipy>=1.10",
+    "flask>=2.3",
+    "waitress>=2.1",                # production web server
+]
+# Raspberry Pi only (via apt, not pip): python3-picamera2
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "mypy>=1.10"]
+
+[project.scripts]
+qc = "qc.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["qc", "qc.web"]
+
+[tool.setuptools.package-data]
+"qc.web" = ["static/*"]
+
+# ---------------------------------------------------------------- tests
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "--strict-markers"
+
+[tool.coverage.run]
+source = ["qc"]
+omit = ["qc/cli.py"]          # command line wrapper – exercised by hand, not by unit tests
+
+# ---------------------------------------------------------------- lint + format (PEP 8)
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle (PEP 8)
+    "F",        # pyflakes (unused names, undefined names)
+    "I",        # import order
+    "B",        # bugbear (likely bugs)
+    "UP",       # modern Python syntax
+    "SIM",      # simplifications
+    "C90",      # cyclomatic complexity
+    "RUF",      # ruff-specific checks
+    "N",        # PEP 8 naming
+]
+ignore = [
+    "N806",     # upper-case local names are conventional for matrices/images in image processing (H, W, K)
+    "N812",     # "import methods as M" style module aliases
+    "RUF001", "RUF002", "RUF003",  # ×, –, “ ” in UI texts and comments are intentional
+    "RUF046",   # int(round(x)) is needed: with NumPy < 2 (Raspberry Pi OS) round() of a NumPy float is a float
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["C90"]
+
+# ---------------------------------------------------------------- types (PEP 484)
+[tool.mypy]
+python_version = "3.11"
+files = ["qc"]
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true

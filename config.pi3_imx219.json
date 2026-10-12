@@ -18,9 +18,6 @@
   "trigger": {
     "detect_width": 240
   },
-  "self_learning": {
-    "max_references": 40
-  },
   "ui": {
     "setup_pin": "1234",
     "preview_fps": 5,

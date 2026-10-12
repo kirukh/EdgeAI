@@ -40,13 +40,11 @@
         <button class="go wide" id="sStart">▶ Start inspection</button>
         <button id="sTeach">＋ Teach in new part</button>
         <button id="sBatch">✓ Finish batch</button>
-        <button class="small wide" id="sCheck" style="font-size:15px;font-weight:600;padding:10px">Reference part check</button>
       </div>
       <div class="s-counts">
         <div class="ok"><b id="sOK">0</b>OK</div><div class="nok"><b id="sNOK">0</b>NOK</div><div><b id="sRate">–</b>NOK rate</div>
       </div>
       <div class="dots" id="sDots" title="Last parts (tap to show)"></div>
-      <div class="s-note" id="sLearnInfo"></div>
     </div>
 
     <div class="s-panel wiz hidden" id="sWiz"></div>
@@ -70,8 +68,7 @@
   <button class="small" id="btnOperator" title="Back to the simple operator screen and lock the setup area">← Operator view · lock</button>
   <h1>AI Quality Inspection · Metal Parts</h1>
   <span class="pill" id="mode">–</span>
-  <span class="pill" id="calPill" title="Camera calibration">–</span>
-  <span class="pill" id="stPill" title="Last reference part check">–</span>
+  <span class="pill" id="scalePill" title="Scale (camera.mm_per_px in config.json)">–</span>
   <span class="pill hidden" id="driftPill" title="Image quality differs from the learning phase">Drift</span>
   <span class="meta" id="cam"></span>
   <span class="meta" id="activeModel"></span>
@@ -107,11 +104,10 @@
           <b style="font-size:13px">Supervisor check:</b>
           <button class="small" id="fbCorrect">✓ Correct</button>
           <button class="small" id="fbWrong"></button>
-          <label class="check hidden" id="fbRefWrap" style="font-size:12.5px"><input type="checkbox" id="fbRef" checked> add part as good reference</label>
           <span class="fb" id="fbState"></span>
         </div>
-        <p class="hint">Feedback shows the real hit rate in the statistics and the archive. False alarms can be queued as
-          additional references – retrain the model (Models tab) to use them.</p>
+        <p class="hint">Feedback shows the real hit rate (false alarms, missed defects) in the statistics and the archive.
+          If false alarms repeat: lower the sensitivity of the method (Models tab) or teach the part in again.</p>
       </div>
     </section>
 
@@ -147,7 +143,7 @@
       <section class="card archives">
         <h2>Results archive</h2>
         <p class="hint" style="margin-top:0">Archives are created with “Finish batch” on the operator screen. Each ZIP contains
-          the inspection log, NOK images, supervisor feedback, reference checks and a summary.</p>
+          the inspection log, NOK images, supervisor feedback and a summary.</p>
         <div id="archiveList"></div>
       </section>
 
@@ -159,11 +155,6 @@
 
     <!-- ============================== MODELS ============================== -->
     <div class="col hidden" data-pane="models">
-      <section class="card">
-        <h2>Method settings</h2>
-        <p class="hint" style="margin-top:0">Used for new models and for “Retrain”. Saved automatically.</p>
-        <div class="settings" id="methodSettings"></div>
-      </section>
       <section class="card models">
         <h2>Models</h2>
         <p class="hint" style="margin-top:0">Sensitivity: &gt; 1 = stricter (tighter tolerances/thresholds), &lt; 1 = more tolerant.
@@ -176,21 +167,8 @@
     <!-- ============================== SETUP ============================== -->
     <div class="col hidden" data-pane="setup">
       <section class="card">
-        <h2>Inspection settings</h2>
-        <div class="settings">
-          <label>Lighting mode
-            <select id="setLight">
-              <option value="single">Single light</option>
-              <option value="dual">Dual light – backlight (holes/outline) + front light (surface)</option>
-            </select>
-          </label>
-          <label class="check"><input type="checkbox" id="setSelfLearn"> Collect clearly good parts for self-learning</label>
-          <label class="check" style="margin-left:24px"><input type="checkbox" id="setSelfAuto"> Train them in automatically (in the background)</label>
-          <p class="hint" id="selfLearnHint" style="margin:0 0 4px 24px"></p>
-          <p class="hint" id="shotsHint" style="margin:0"></p>
-        </div>
-        <p class="hint">Dual light needs two switchable LED groups (see Outputs) and its own models. Multiple shots
-          apply to single-light mode on a moving belt.</p>
+        <h2>Inspection</h2>
+        <p class="hint" style="margin-top:0" id="inspInfo"></p>
       </section>
 
       <section class="card">
@@ -206,56 +184,16 @@
       </section>
 
       <section class="card">
-        <h2>Camera calibration (mm)</h2>
-        <div class="kv" id="calInfo"></div>
-        <div id="calSession" class="hidden">
-          <h3>Calibration running – <span id="calCount">0</span> image(s)</h3>
-          <p class="hint" style="margin-top:0" id="calInstr"></p>
-          <div class="row">
-            <button class="primary" id="btnCalCapture">Capture image</button>
-            <button id="btnCalCompute">Compute calibration</button>
-            <button id="btnCalCancel">Cancel</button>
-          </div>
-          <img class="calprev hidden" id="calPreview" alt="">
-        </div>
-        <div id="calIdle">
-          <div class="row" style="margin-top:10px">
-            <label>Inner corners <input type="number" id="calCols" min="3" max="30"> ×
-              <input type="number" id="calRows" min="3" max="30"></label>
-            <label>Square <input type="number" id="calSq" min="0.5" step="0.01"> mm</label>
-          </div>
-          <div class="row"><button class="primary" id="btnCalStart">Start calibration</button>
-            <button class="danger" id="btnCalDelete">Delete calibration</button></div>
-          <p class="hint">Print a checkerboard, measure the square size with a calliper. Image 1: board flat on the belt
-            (defines mm/px). Optionally 5–15 more images, board tilted 20–40° all over the image, to correct lens distortion.
-            Retrain models afterwards.</p>
-        </div>
-        <div class="row hidden" id="simBoard" style="margin-top:8px">
-          <span class="hint">Simulator:</span>
-          <button class="small" id="btnBoardShow">Show checkerboard (new pose)</button>
-          <button class="small" id="btnBoardHide">Hide</button>
-        </div>
-      </section>
-
-      <section class="card">
         <h2>Image quality / drift</h2>
         <p class="hint" style="margin-top:0">Median of the last parts compared with the learning phase.</p>
         <table class="drift"><thead><tr><th>Value</th><th>Learned</th><th>Now</th><th>Deviation</th></tr></thead>
           <tbody id="driftRows"></tbody></table>
       </section>
 
-      <section class="card">
-        <h2>Outputs (GPIO)</h2>
-        <div class="kv" id="ioInfo"></div>
-        <div class="row" style="margin-top:8px"><button id="btnTestReject">Test reject pulse</button></div>
-        <div class="msgs" id="ioEvents" style="margin-top:8px; max-height:140px"></div>
-        <p class="hint">Pins are set in config.json → "io". Never connect valves, relays or LED strips directly – use a driver board.</p>
-      </section>
-
       <section class="card hidden" id="simCard">
         <h2>Simulator</h2>
         <div class="settings">
-          <label>Lighting (single-light mode)
+          <label>Lighting
             <select id="simLight"><option value="front">Front light (lamp above the belt)</option><option value="back">Backlight (lamp below the belt)</option></select>
           </label>
           <label>Part type

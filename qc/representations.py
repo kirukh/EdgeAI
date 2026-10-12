@@ -4,9 +4,10 @@ Each representation returns a float32 image roughly in [0, 1] on the aligned
 canvas. ``main.py evaluate`` compares which representation works best for
 which inspection method.
 """
+
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import cv2
 import numpy as np

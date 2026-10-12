@@ -8,6 +8,7 @@ The images do not replace real photos, but they make it possible to test the
 complete pipeline (learn → inspect → visualise) without hardware and to
 compare the methods systematically.
 """
+
 from __future__ import annotations
 
 import copy
@@ -71,6 +72,7 @@ def _random_inside(rng, poly: np.ndarray, margin: float, extra_ok=lambda x, y: T
             return x, y
     return float(poly[:, 0].mean()), float(poly[:, 1].mean())
 
+
 DEFECTS = ["missing", "blind", "position", "diameter", "extra", "scratch", "stain", "corner"]
 
 DEFECT_LABELS = {
@@ -88,8 +90,8 @@ DEFECT_LABELS = {
 @dataclass
 class PartInstance:
     type_name: str
-    outline: np.ndarray                    # outline polygon (local coordinates)
-    holes: list[dict]                      # through holes
+    outline: np.ndarray  # outline polygon (local coordinates)
+    holes: list[dict]  # through holes
     blind_holes: list[dict] = field(default_factory=list)
     scratches: list[dict] = field(default_factory=list)
     stains: list[dict] = field(default_factory=list)
@@ -157,8 +159,15 @@ def make_part(type_name: str = "A", defect: str | None = None, rng: np.random.Ge
 
 def _draw_hole(img, h, cx, cy, value, thickness=cv2.FILLED):
     if h["shape"] == "circle":
-        cv2.circle(img, (int(round((cx + h["x"]) * 8)), int(round((cy + h["y"]) * 8))),
-                   int(round(h["r"] * 8)), value, thickness, cv2.LINE_AA, shift=3)
+        cv2.circle(
+            img,
+            (int(round((cx + h["x"]) * 8)), int(round((cy + h["y"]) * 8))),
+            int(round(h["r"] * 8)),
+            value,
+            thickness,
+            cv2.LINE_AA,
+            shift=3,
+        )
     else:
         x0, y0 = cx + h["x"] - h["w"] / 2, cy + h["y"] - h["h"] / 2
         pts = np.array([[x0, y0], [x0 + h["w"], y0], [x0 + h["w"], y0 + h["h"]], [x0, y0 + h["h"]]]) * 8
@@ -179,7 +188,7 @@ def render_layers(part: PartInstance, lighting: str, scale: float = 1.0):
     rng = np.random.default_rng(part.texture_seed)
 
     alpha = np.zeros((H, W), np.float32)
-    pts = poly + [cx, cy]
+    pts = poly + np.array([cx, cy])  # shift the polygon (NumPy vector addition)
     cv2.fillPoly(alpha, [(pts * 8).round().astype(np.int32)], 1.0, cv2.LINE_AA, shift=3)
     if part.corner_cut:
         # chip off the corner: triangle between the vertex and points on both adjacent edges
@@ -193,7 +202,7 @@ def render_layers(part: PartInstance, lighting: str, scale: float = 1.0):
         _draw_hole(alpha, h, cx, cy, 0.0)
 
     if lighting == "front":
-        base = np.array([182, 178, 172], np.float32)   # BGR, slightly bluish metal
+        base = np.array([182, 178, 172], np.float32)  # BGR, slightly bluish metal
         streaks = rng.normal(0, 7, (H, 1)).astype(np.float32)
         streaks = cv2.GaussianBlur(np.repeat(streaks, W, axis=1), (1, 3), 0)
         grad = np.linspace(-10, 10, W, dtype=np.float32)[None, :]
@@ -209,8 +218,8 @@ def render_layers(part: PartInstance, lighting: str, scale: float = 1.0):
         rim = np.zeros((H, W), np.float32)
         _draw_hole(rim, h, cx, cy, 1.0, thickness=3)
         if lighting == "front":
-            layer = layer * (1 - 0.30 * m[:, :, None])      # bottom of the blind hole slightly darker
-            layer = layer * (1 - 0.45 * rim[:, :, None])    # shadow ring at the hole edge
+            layer = layer * (1 - 0.30 * m[:, :, None])  # bottom of the blind hole slightly darker
+            layer = layer * (1 - 0.45 * rim[:, :, None])  # shadow ring at the hole edge
         else:
             layer = layer + 6 * m[:, :, None]
 
@@ -274,14 +283,15 @@ def compose(
         aw = cv2.warpAffine(alpha, M, (w, h), flags=cv2.INTER_LINEAR)[:, :, None]
         frame = frame * (1 - aw) + lw * aw
 
-    gain = rng.uniform(0.95, 1.05)                       # small lighting fluctuation
+    gain = rng.uniform(0.95, 1.05)  # small lighting fluctuation
     frame = frame * gain + rng.normal(0, 2.5, frame.shape).astype(np.float32)
     frame = cv2.GaussianBlur(np.clip(frame, 0, 255), (0, 0), 0.6)
     return frame.astype(np.uint8)
 
 
-def random_pose(rng: np.random.Generator, allow_flip: bool = True, jitter: float = 30, max_angle: float = 8,
-                any_angle: bool = False):
+def random_pose(
+    rng: np.random.Generator, allow_flip: bool = True, jitter: float = 30, max_angle: float = 8, any_angle: bool = False
+):
     """Random position/rotation on the belt. ``any_angle`` = parts arrive in any rotation (0–360°)."""
     if any_angle:
         ang = rng.uniform(0, 360)
@@ -290,8 +300,9 @@ def random_pose(rng: np.random.Generator, allow_flip: bool = True, jitter: float
     return (320 + rng.uniform(-jitter, jitter), 240 + rng.uniform(-jitter * 0.7, jitter * 0.7), ang)
 
 
-def generate_dataset(out_dir, part_type="A", lighting="front", n_train=15, n_test_good=20, n_per_defect=5, seed=0,
-                     any_angle=False):
+def generate_dataset(
+    out_dir, part_type="A", lighting="front", n_train=15, n_test_good=20, n_per_defect=5, seed=0, any_angle=False
+):
     """Writes train/ (good parts only) and test/ok, test/nok/<defect> as PNG."""
     from pathlib import Path
 
@@ -300,9 +311,15 @@ def generate_dataset(out_dir, part_type="A", lighting="front", n_train=15, n_tes
     (out / "train").mkdir(parents=True, exist_ok=True)
     (out / "test" / "ok").mkdir(parents=True, exist_ok=True)
     for i in range(n_train):
-        cv2.imwrite(str(out / "train" / f"good_{i:03d}.png"), compose(make_part(part_type, None, rng), random_pose(rng, any_angle=any_angle), lighting, rng=rng))
+        cv2.imwrite(
+            str(out / "train" / f"good_{i:03d}.png"),
+            compose(make_part(part_type, None, rng), random_pose(rng, any_angle=any_angle), lighting, rng=rng),
+        )
     for i in range(n_test_good):
-        cv2.imwrite(str(out / "test" / "ok" / f"good_{i:03d}.png"), compose(make_part(part_type, None, rng), random_pose(rng, any_angle=any_angle), lighting, rng=rng))
+        cv2.imwrite(
+            str(out / "test" / "ok" / f"good_{i:03d}.png"),
+            compose(make_part(part_type, None, rng), random_pose(rng, any_angle=any_angle), lighting, rng=rng),
+        )
     for d in DEFECTS:
         (out / "test" / "nok" / d).mkdir(parents=True, exist_ok=True)
         for i in range(n_per_defect):

@@ -31,7 +31,7 @@ echo "== Project: $DIR (user: $RUN_USER, sudo: $([ $HAVE_SUDO = 1 ] && echo yes 
 echo "== 1/4 System packages"
 if [ $HAVE_SUDO = 1 ]; then
   sudo apt-get update -q
-  sudo apt-get install -y -q python3-picamera2 python3-opencv python3-scipy python3-flask python3-waitress python3-pil
+  sudo apt-get install -y -q python3-picamera2 python3-opencv python3-scipy python3-flask python3-waitress
 else
   MISSING=""
   for mod in picamera2:python3-picamera2 cv2:python3-opencv scipy:python3-scipy numpy:python3-numpy; do

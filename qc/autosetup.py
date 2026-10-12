@@ -23,15 +23,17 @@ stored with the model and applied whenever the model is selected:
 
 What cannot be automated: turning a lens by hand, moving the camera, the light itself.
 """
+
 from __future__ import annotations
 
 import math
+
 import cv2
 import numpy as np
 
 from .config import AutoSetupConfig
 
-FULL = (0.0, 0.0, 1.0, 1.0)          # crop as fractions of the sensor: x, y, w, h
+FULL = (0.0, 0.0, 1.0, 1.0)  # crop as fractions of the sensor: x, y, w, h
 
 
 # ------------------------------------------------------------------ exposure
@@ -43,7 +45,7 @@ def bright_level(frame: np.ndarray, contour: np.ndarray | None, scale: float = 1
     if contour is not None:
         x, y, w, h = cv2.boundingRect((contour.astype(np.float32) * scale).astype(np.int32))
         mx, my = int(0.15 * w) + 4, int(0.15 * h) + 4
-        img = img[max(0, y - my):y + h + my, max(0, x - mx):x + w + mx]
+        img = img[max(0, y - my) : y + h + my, max(0, x - mx) : x + w + mx]
     if img.size == 0:
         return 0.0
     return float(np.percentile(img, 99.5))
@@ -52,14 +54,14 @@ def bright_level(frame: np.ndarray, contour: np.ndarray | None, scale: float = 1
 def next_exposure(exposure_us: float, gain: float, level: float, cfg: AutoSetupConfig) -> tuple[int, float, bool]:
     """One step of the exposure control (the sensor is linear: brightness ∝ exposure × gain).
     Returns (exposure, gain, converged)."""
-    if level >= 254.0:                               # clipped → the true level is unknown, halve
+    if level >= 254.0:  # clipped → the true level is unknown, halve
         product = exposure_us * gain * 0.5
         done = False
     else:
         factor = cfg.target_level / max(level, 1.0)
         product = exposure_us * gain * factor
         done = abs(factor - 1.0) < 0.04
-    return split_exposure(product, cfg.max_exposure_us, cfg) + (done,)
+    return (*split_exposure(product, cfg.max_exposure_us, cfg), done)
 
 
 def split_exposure(product: float, max_exposure_us: float, cfg: AutoSetupConfig) -> tuple[int, float]:
@@ -93,7 +95,7 @@ def edge_width(gray: np.ndarray, contour: np.ndarray, n: int = 72, half: int = 7
             continue
         prof = cv2.remap(g, xs, ys, cv2.INTER_LINEAR).ravel()
         lo, hi = np.median(prof[:8]), np.median(prof[-8:])
-        if abs(hi - lo) < 25:                        # too little contrast here (e.g. a hole touches)
+        if abs(hi - lo) < 25:  # too little contrast here (e.g. a hole touches)
             continue
         if hi < lo:
             prof, lo, hi = prof[::-1], hi, lo
@@ -121,8 +123,9 @@ def to_sensor(u: float, v: float, out_size: tuple[int, int], crop) -> tuple[floa
     return x + u / out_size[0] * w, y + v / out_size[1] * h
 
 
-def crop_for_path(center: tuple[float, float], diameter: tuple[float, float], axis: str,
-                  cfg: AutoSetupConfig) -> tuple[tuple[float, float, float, float], float]:
+def crop_for_path(
+    center: tuple[float, float], diameter: tuple[float, float], axis: str, cfg: AutoSetupConfig
+) -> tuple[tuple[float, float, float, float], float]:
     """Sensor crop (x, y, w, h as fractions) for a part of the given diameter (as fraction of the
     sensor width, height) travelling along ``axis`` through ``center``. Same aspect ratio as the
     sensor (w == h as fractions) → square pixels. Returns (crop, zoom)."""
@@ -144,9 +147,13 @@ def path_from_track(points: list[tuple[float, float, float]]) -> dict | None:
     dt = p[-1, 0] - p[0, 0]
     dx, dy = p[-1, 1] - p[0, 1], p[-1, 2] - p[0, 2]
     dist = math.hypot(dx, dy)
-    if dist < 0.05 or dt <= 0:                      # moved less than 5 % of the image: belt stopped
+    if dist < 0.05 or dt <= 0:  # moved less than 5 % of the image: belt stopped
         return None
     axis = "x" if abs(dx) >= abs(dy) else "y"
     across = float(np.median(p[:, 2] if axis == "x" else p[:, 1]))
-    return {"axis": axis, "across": across, "speed": dist / dt,          # sensor fractions per second
-            "direction": float(math.degrees(math.atan2(dy, dx)))}
+    return {
+        "axis": axis,
+        "across": across,
+        "speed": dist / dt,  # sensor fractions per second
+        "direction": float(math.degrees(math.atan2(dy, dx))),
+    }

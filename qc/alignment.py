@@ -18,6 +18,7 @@ Steps per image:
 All transforms are stored as a 3×3 matrix ``to_orig`` so that defect locations
 can later be projected back exactly into the original image.
 """
+
 from __future__ import annotations
 
 import math
@@ -32,24 +33,24 @@ from .config import LocalizationConfig
 @dataclass
 class PartDetection:
     contour: np.ndarray
-    rect: tuple                 # cv2.minAreaRect
-    filled_mask: np.ndarray     # outer contour filled (including holes)
-    part_mask: np.ndarray       # actual material (without holes)
-    polarity: str               # "bright" | "dark" (part relative to background)
-    complete: bool              # part lies completely inside the image
+    rect: tuple  # cv2.minAreaRect
+    filled_mask: np.ndarray  # outer contour filled (including holes)
+    part_mask: np.ndarray  # actual material (without holes)
+    polarity: str  # "bright" | "dark" (part relative to background)
+    complete: bool  # part lies completely inside the image
     area_ratio: float
     centroid: tuple[float, float]
 
 
 @dataclass
 class AlignedPart:
-    frame: np.ndarray           # working image (BGR), basis for the visualisation
-    bgr: np.ndarray             # aligned part (BGR)
-    gray: np.ndarray            # aligned, uint8
-    norm: np.ndarray            # aligned, float32, background≈0, part≈1
-    filled_mask: np.ndarray     # aligned, uint8 0/255
-    part_mask: np.ndarray       # aligned, uint8 0/255
-    to_orig: np.ndarray         # 3×3: canvas coordinates → working image coordinates
+    frame: np.ndarray  # working image (BGR), basis for the visualisation
+    bgr: np.ndarray  # aligned part (BGR)
+    gray: np.ndarray  # aligned, uint8
+    norm: np.ndarray  # aligned, float32, background≈0, part≈1
+    filled_mask: np.ndarray  # aligned, uint8 0/255
+    part_mask: np.ndarray  # aligned, uint8 0/255
+    to_orig: np.ndarray  # 3×3: canvas coordinates → working image coordinates
     rect: tuple
     polarity: str
     part_level: float
@@ -81,10 +82,8 @@ def detect_part(gray: np.ndarray, cfg: LocalizationConfig) -> PartDetection | No
         border = np.concatenate([blur[:b].ravel(), blur[-b:].ravel(), blur[:, :b].ravel(), blur[:, -b:].ravel()])
         polarity = "dark" if np.median(border) > t else "bright"
 
-    if polarity == "bright":
-        binary = (blur > t).astype(np.uint8) * 255
-    else:
-        binary = (blur <= t).astype(np.uint8) * 255
+    foreground = blur > t if polarity == "bright" else blur <= t
+    binary = foreground.astype(np.uint8) * 255
 
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, k)
@@ -133,7 +132,7 @@ def _coarse_angle(rect: tuple) -> float:
     return angle
 
 
-def default_canvas(det: "PartDetection", margin_ratio: float) -> tuple[int, int]:
+def default_canvas(det: PartDetection, margin_ratio: float) -> tuple[int, int]:
     """Canvas size so that the part fits around its centroid (in coarse orientation)."""
     cx, cy = det.centroid
     a = math.radians(_coarse_angle(det.rect))
@@ -148,7 +147,7 @@ def default_canvas(det: "PartDetection", margin_ratio: float) -> tuple[int, int]
     return cw, ch
 
 
-def _coarse_matrix(det: "PartDetection", canvas: tuple[int, int]) -> np.ndarray:
+def _coarse_matrix(det: PartDetection, canvas: tuple[int, int]) -> np.ndarray:
     """3×3 matrix working image → canvas (long side horizontal, centroid in the centre)."""
     cx, cy = det.centroid
     m = cv2.getRotationMatrix2D((cx, cy), _coarse_angle(det.rect), 1.0)
@@ -169,8 +168,12 @@ def _canvas_rotation(canvas: tuple[int, int], angle: float, mirror: bool = False
 def _warp(img: np.ndarray, to_canvas: np.ndarray, canvas: tuple[int, int], nearest=False, border_value=0):
     interp = cv2.INTER_NEAREST if nearest else cv2.INTER_LINEAR
     return cv2.warpAffine(
-        img, to_canvas[:2], canvas, flags=interp,
-        borderMode=cv2.BORDER_CONSTANT, borderValue=border_value,
+        img,
+        to_canvas[:2],
+        canvas,
+        flags=interp,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=border_value,
     )
 
 
@@ -192,12 +195,12 @@ def _masked_median(gray: np.ndarray, mask: np.ndarray) -> float | None:
     if n == 0:
         return None
     cum = np.cumsum(hist)
-    lo = int(np.searchsorted(cum, (n - 1) / 2.0, side="right"))       # lower middle element
+    lo = int(np.searchsorted(cum, (n - 1) / 2.0, side="right"))  # lower middle element
     hi = int(np.searchsorted(cum, n / 2.0, side="right")) if n % 2 == 0 else lo
     return (lo + hi) / 2.0
 
 
-def _levels(gray: np.ndarray, det: PartDetection) -> tuple[float, float]:
+def levels(gray: np.ndarray, det: PartDetection) -> tuple[float, float]:
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
     inner = cv2.erode(det.part_mask, k)
     outer = cv2.dilate(det.filled_mask, k, iterations=2)
@@ -214,15 +217,23 @@ def _render_norm(gray, to_canvas, canvas, part_level, bg_level) -> np.ndarray:
     return _normalize(_warp(gray, to_canvas, canvas, border_value=int(bg_level)), bg_level, part_level)
 
 
-def _render(frame, gray, det, to_canvas, canvas, part_level, bg_level) -> AlignedPart:
+def render(frame, gray, det, to_canvas, canvas, part_level, bg_level) -> AlignedPart:
     gray_c = _warp(gray, to_canvas, canvas, border_value=int(bg_level))
     bgr_c = _warp(frame, to_canvas, canvas, border_value=(int(bg_level),) * 3)
     filled_c = _warp(det.filled_mask, to_canvas, canvas, nearest=True)
     part_c = _warp(det.part_mask, to_canvas, canvas, nearest=True)
     return AlignedPart(
-        frame=frame, bgr=bgr_c, gray=gray_c, norm=_normalize(gray_c, bg_level, part_level),
-        filled_mask=filled_c, part_mask=part_c, to_orig=np.linalg.inv(to_canvas),
-        rect=det.rect, polarity=det.polarity, part_level=part_level, bg_level=bg_level,
+        frame=frame,
+        bgr=bgr_c,
+        gray=gray_c,
+        norm=_normalize(gray_c, bg_level, part_level),
+        filled_mask=filled_c,
+        part_mask=part_c,
+        to_orig=np.linalg.inv(to_canvas),
+        rect=det.rect,
+        polarity=det.polarity,
+        part_level=part_level,
+        bg_level=bg_level,
     )
 
 
@@ -232,12 +243,12 @@ def _search_patch(norm: np.ndarray, size: int = 96) -> np.ndarray:
     h, w = norm.shape
     s = size / max(h, w)
     side = int(math.ceil(math.hypot(w, h) * s)) + 2
-    src = cv2.GaussianBlur(np.clip(norm, 0, 1).astype(np.float32), (0, 0), max(0.5, 0.5 / s))   # anti-aliasing
+    src = cv2.GaussianBlur(np.clip(norm, 0, 1).astype(np.float32), (0, 0), max(0.5, 0.5 / s))  # anti-aliasing
     m = np.array([[s, 0, side / 2.0 - s * w / 2.0], [0, s, side / 2.0 - s * h / 2.0]], dtype=np.float64)
     return cv2.warpAffine(src, m, (side, side), flags=cv2.INTER_LINEAR)
 
 
-def _ncc(a: np.ndarray, b: np.ndarray) -> float:
+def ncc(a: np.ndarray, b: np.ndarray) -> float:
     a = a.ravel() - a.mean()
     b = b.ravel() - b.mean()
     return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9))
@@ -258,7 +269,7 @@ def _rotate_canvas_image(img: np.ndarray, angle: float, mirror: bool) -> np.ndar
     return cv2.warpAffine(img, _canvas_rotation((w, h), angle, mirror)[:2], (w, h), flags=cv2.INTER_LINEAR)
 
 
-_REF_CACHE: "dict[tuple, tuple[np.ndarray, object]]" = {}
+_REF_CACHE: dict[tuple, tuple[np.ndarray, object]] = {}
 
 
 def _ref_cached(reference: np.ndarray, key: str, build):
@@ -287,14 +298,17 @@ def _rotation_bank(reference_norm: np.ndarray, patch: int = 72):
     c = (side / 2.0, side / 2.0)
     rows = []
     for a in range(360):
-        r = cv2.warpAffine(ref, cv2.getRotationMatrix2D(c, -float(a), 1.0), (side, side), flags=cv2.INTER_LINEAR).ravel()
+        r = cv2.warpAffine(
+            ref, cv2.getRotationMatrix2D(c, -float(a), 1.0), (side, side), flags=cv2.INTER_LINEAR
+        ).ravel()
         r = r - r.mean()
         rows.append(r / (np.linalg.norm(r) + 1e-9))
     return ref.shape, np.asarray(rows, dtype=np.float32)
 
 
-def find_rotation(norm: np.ndarray, reference_norm: np.ndarray, allow_mirror: bool = False,
-                  step: float = 4.0, mode: str = "full") -> tuple[float, bool, float]:
+def find_rotation(
+    norm: np.ndarray, reference_norm: np.ndarray, allow_mirror: bool = False, step: float = 4.0, mode: str = "full"
+) -> tuple[float, bool, float]:
     """Angle (and mirroring) at which the part best matches the reference.
 
     1. Search over 0–360° in 1° steps on a small image, as one matrix product against
@@ -317,15 +331,14 @@ def find_rotation(norm: np.ndarray, reference_norm: np.ndarray, allow_mirror: bo
 
     w = max(1, int(round(step)))
     candidates = []
-    for mirror in ((False, True) if allow_mirror else (False,)):
-        scores = bank @ unit(cv2.flip(img, 1) if mirror else img)          # score per angle 0…359
+    for mirror in (False, True) if allow_mirror else (False,):
+        scores = bank @ unit(cv2.flip(img, 1) if mirror else img)  # score per angle 0…359
         if mode == "full":
             ext = np.concatenate([scores[-w:], scores, scores[:w]])
             win = np.lib.stride_tricks.sliding_window_view(ext, 2 * w + 1).max(axis=1)
-            idx = np.flatnonzero(scores >= win)                           # local maxima (circular)
-        else:                                                             # "flip": only around 0° and 180°
-            idx = [int(max(range(-w, w + 1), key=lambda d: scores[(base + d) % 360]) + base) % 360
-                   for base in (0, 180)]
+            idx = np.flatnonzero(scores >= win)  # local maxima (circular)
+        else:  # "flip": only around 0° and 180°
+            idx = [int(max(range(-w, w + 1), key=lambda d: scores[(base + d) % 360]) + base) % 360 for base in (0, 180)]
         candidates += [(float(scores[i]), float(i), mirror) for i in idx]
     best_coarse = max(sc for sc, _, _ in candidates)
     candidates = sorted([cd for cd in candidates if cd[0] >= best_coarse - 0.15], reverse=True)[:8]
@@ -334,12 +347,13 @@ def find_rotation(norm: np.ndarray, reference_norm: np.ndarray, allow_mirror: bo
     ref_full = _ref_cached(reference_norm, "clip", lambda: np.clip(reference_norm, 0, 1))
     ref_vals = _ref_cached(reference_norm, "clip_region", lambda: ref_full[region] if region.any() else ref_full)
     norm_c = np.clip(norm, 0, 1)
-    best = None
+    best: tuple[float, bool, float] | None = None
     for _, a, mirror in candidates:
         cand = _rotate_canvas_image(norm_c, a, mirror)
-        sc = _ncc(cand[region], ref_vals) if region.any() else _ncc(cand, ref_vals)
+        sc = ncc(cand[region], ref_vals) if region.any() else ncc(cand, ref_vals)
         if best is None or sc > best[2]:
             best = (a % 360, mirror, sc)
+    assert best is not None  # the global maximum is always a candidate
     return best
 
 
@@ -354,11 +368,11 @@ def align_part(
     gray = to_gray(frame)
     if canvas is None:
         canvas = default_canvas(det, cfg.canvas_margin_ratio)
-    part_level, bg_level = _levels(gray, det)
+    part_level, bg_level = levels(gray, det)
 
     to_canvas = _coarse_matrix(det, canvas)
     if reference_norm is None:
-        return _render(frame, gray, det, to_canvas, canvas, part_level, bg_level)
+        return render(frame, gray, det, to_canvas, canvas, part_level, bg_level)
 
     # Intermediate steps only need the normalised grey image; colour image and masks are
     # rendered once, at the end (saves 2 × 3 full-canvas warps per part on a small Pi).
@@ -380,7 +394,7 @@ def align_part(
         refined = _ecc_refine(frame, gray, det, norm, to_canvas, canvas, reference_norm, part_level, bg_level, datum)
         if refined is not None:
             return refined
-    return _render(frame, gray, det, to_canvas, canvas, part_level, bg_level)
+    return render(frame, gray, det, to_canvas, canvas, part_level, bg_level)
 
 
 def _use_outline_datum(cfg: LocalizationConfig, reference_norm: np.ndarray) -> bool:
@@ -415,19 +429,30 @@ def _ecc_refine(frame, gray, det, norm, to_canvas, canvas, ref, part_level, bg_l
                 binary = np.zeros_like(binary)
                 cv2.drawContours(binary, [max(contours, key=cv2.contourArea)], -1, 1, cv2.FILLED)
         interior = cv2.erode(binary, np.ones((5, 5), np.uint8)) > 0
-        out = np.where(interior, 1.0, img if not outline_datum else np.where(binary > 0, np.maximum(img, 0.5 * binary), img))
+        out = np.where(
+            interior, 1.0, img if not outline_datum else np.where(binary > 0, np.maximum(img, 0.5 * binary), img)
+        )
         return cv2.GaussianBlur(out.astype(np.float32), (0, 0), 1.0)
 
     # ECC on the half-resolution image (4× fewer pixels). The smoothed edge image keeps
     # sub-pixel information – a second pass at full resolution was measured to bring no
     # accuracy gain (0.155 vs 0.156 px) but doubled the time.
-    half = lambda x: cv2.resize(x, (x.shape[1] // 2, x.shape[0] // 2), interpolation=cv2.INTER_AREA)
-    tmpl_half = _ref_cached(ref, f"ecc_tmpl_{outline_datum}", lambda: half(shape(ref)))   # fixed per model
+    def half(x: np.ndarray) -> np.ndarray:
+        return cv2.resize(x, (x.shape[1] // 2, x.shape[0] // 2), interpolation=cv2.INTER_AREA)
+
+    tmpl_half = _ref_cached(ref, f"ecc_tmpl_{outline_datum}", lambda: half(shape(ref)))  # fixed per model
     img = shape(norm)
     warp = np.eye(2, 3, dtype=np.float32)
     try:
-        _, warp = cv2.findTransformECC(tmpl_half, half(img), warp, cv2.MOTION_EUCLIDEAN,
-                                       (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 80, 1e-5), None, 3)
+        _, warp = cv2.findTransformECC(
+            tmpl_half,
+            half(img),
+            warp,
+            cv2.MOTION_EUCLIDEAN,
+            (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 80, 1e-5),
+            None,
+            3,
+        )
         warp[:, 2] *= 2.0
     except cv2.error:
         return None
@@ -439,4 +464,4 @@ def _ecc_refine(frame, gray, det, norm, to_canvas, canvas, ref, part_level, bg_l
     w3 = np.vstack([warp.astype(np.float64), [0, 0, 1]])
     # ECC: aligned(W·x) ≈ ref(x)  →  canvas→original = inv(to_canvas) · W
     to_orig = np.linalg.inv(to_canvas) @ w3
-    return _render(frame, gray, det, np.linalg.inv(to_orig), canvas, part_level, bg_level)
+    return render(frame, gray, det, np.linalg.inv(to_orig), canvas, part_level, bg_level)

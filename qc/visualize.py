@@ -1,4 +1,5 @@
 """Visualisation of inspection results (highlight the defect location in colour)."""
+
 from __future__ import annotations
 
 import cv2

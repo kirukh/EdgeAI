@@ -7,8 +7,9 @@ results folder is emptied for the next batch::
     data/archive/<batch-name>_<YYYY-MM-DD_HHMMSS>.zip
         summary.json          counts, defect types, models, time range
         summary.txt           the same, human-readable
-        results/<date>/...    inspection_log.csv + saved images
+        results/<date>/...    inspection_log.csv, feedback_log.csv, saved images
 """
+
 from __future__ import annotations
 
 import csv
@@ -31,45 +32,80 @@ def has_results(results_dir: str | Path) -> bool:
     return root.exists() and any(p.is_file() for p in root.rglob("*"))
 
 
-def summarize(results_dir: str | Path) -> dict:
-    """Evaluates all inspection logs in the results folder."""
-    results, defects, models = Counter(), Counter(), Counter()
+def _version_key(row: dict) -> str:
+    return f"{row.get('model', '')} v{row.get('model_version') or 1}"
+
+
+def _read_inspections(results_dir: Path) -> tuple[Counter[str], Counter[str], Counter[str], list[str], dict]:
+    """inspection_log.csv files → (results, defect types, models, times, per model version)."""
+    results: Counter[str] = Counter()
+    defects: Counter[str] = Counter()
+    models: Counter[str] = Counter()
     times: list[str] = []
-    for log in sorted(Path(results_dir).rglob("inspection_log.csv")):
+    per_version: dict[str, Counter[str]] = {}
+    for log in sorted(results_dir.rglob("inspection_log.csv")):
         with log.open(newline="", encoding="utf-8") as f:
             for row in csv.DictReader(f):
                 results[row.get("result", "")] += 1
                 models[row.get("model", "")] += 1
+                per_version.setdefault(_version_key(row), Counter())[row.get("result", "")] += 1
                 if row.get("time"):
                     times.append(row["time"])
                 for d in filter(None, (row.get("defects") or "").split(" | ")):
                     defects[d.split(": ", 1)[0]] += 1
-    fb = Counter()
-    for log in sorted(Path(results_dir).rglob("feedback_log.csv")):
+    return results, defects, models, times, per_version
+
+
+def _read_feedback(results_dir: Path) -> tuple[Counter[str], dict[str, Counter[str]]]:
+    """feedback_log.csv files → (outcomes, outcomes per model version). The last word counts."""
+    latest: dict[str, dict] = {}
+    for log in sorted(results_dir.rglob("feedback_log.csv")):
         with log.open(newline="", encoding="utf-8") as f:
-            latest = {row["image_id"]: row["outcome"] for row in csv.DictReader(f)}   # last word counts
-        fb.update(latest.values())
-    selftests = []
-    for log in sorted(Path(results_dir).rglob("selftest_log.csv")):
-        with log.open(newline="", encoding="utf-8") as f:
-            selftests += [{"time": r["time"], "passed": r["passed"] == "PASS"} for r in csv.DictReader(f)]
+            latest.update({row["image_id"]: row for row in csv.DictReader(f)})
+    fb: Counter[str] = Counter(row["outcome"] for row in latest.values())
+    per_version: dict[str, Counter[str]] = {}
+    for row in latest.values():
+        per_version.setdefault(_version_key(row), Counter())[row["outcome"]] += 1
+    return fb, per_version
+
+
+def summarize(results_dir: str | Path) -> dict:
+    """Evaluates all inspection logs in the results folder."""
+    results, defects, models, times, insp_v = _read_inspections(Path(results_dir))
+    fb, fb_v = _read_feedback(Path(results_dir))
     ok, nok = results.get("OK", 0), results.get("NOK", 0)
     reviewed = sum(fb.values())
     correct = fb.get("confirmed_ok", 0) + fb.get("confirmed_nok", 0)
+    # continuous improvement: how each model version performed (false alarms = parts the operator
+    # accepted as good although they were rated NOK)
+    versions = {}
+    for key in sorted(insp_v):
+        n = insp_v[key].get("OK", 0) + insp_v[key].get("NOK", 0)
+        fa = fb_v.get(key, Counter()).get("false_alarm", 0)
+        versions[key] = {
+            "inspected": n,
+            "nok": insp_v[key].get("NOK", 0),
+            "false_alarms": fa,
+            "missed_defects": fb_v.get(key, Counter()).get("missed", 0),
+            "false_alarm_rate_percent": round(100.0 * fa / n, 2) if n else None,
+        }
     return {
         "supervisor_feedback": {
-            "reviewed": reviewed, "false_alarms": fb.get("false_alarm", 0), "missed_defects": fb.get("missed", 0),
+            "reviewed": reviewed,
+            "false_alarms": fb.get("false_alarm", 0),
+            "missed_defects": fb.get("missed", 0),
             "confirmed": correct,
             "accuracy_of_reviewed_percent": round(100.0 * correct / reviewed, 1) if reviewed else None,
         },
-        "selftests": selftests,
         "inspected": ok + nok,
         "ok": ok,
         "nok": nok,
         "nok_rate_percent": round(100.0 * nok / (ok + nok), 2) if ok + nok else None,
         "no_part": results.get("NO_PART", 0),
+        "not_inspected": results.get("NOT_INSPECTED", 0),  # Pi could not keep up (see results.py)
         "defect_types": dict(defects.most_common()),
         "models": dict(models.most_common()),
+        "model_versions": versions,
         "first_inspection": min(times) if times else None,
         "last_inspection": max(times) if times else None,
     }
@@ -83,20 +119,31 @@ def _summary_text(label: str, s: dict) -> str:
         f"Period:           {s['first_inspection'] or '-'}  to  {s['last_inspection'] or '-'}",
         f"Inspected parts:  {s['inspected']}",
         f"OK:               {s['ok']}",
-        f"NOK:              {s['nok']}" + (f"  ({s['nok_rate_percent']} %)" if s["nok_rate_percent"] is not None else ""),
+        f"NOK:              {s['nok']}"
+        + (f"  ({s['nok_rate_percent']} %)" if s["nok_rate_percent"] is not None else ""),
+        f"Not inspected:    {s['not_inspected']}",
         "",
         "Defect types:",
     ]
     lines += [f"  {k}: {v}" for k, v in s["defect_types"].items()] or ["  none"]
     fb = s.get("supervisor_feedback", {})
     if fb.get("reviewed"):
-        lines += ["", "Supervisor review:",
-                  f"  reviewed results: {fb['reviewed']}",
-                  f"  false alarms:     {fb['false_alarms']}",
-                  f"  missed defects:   {fb['missed_defects']}",
-                  f"  confirmed:        {fb['confirmed']}  ({fb['accuracy_of_reviewed_percent']} % of reviewed)"]
-    if s.get("selftests"):
-        lines += ["", "Self-tests:"] + [f"  {t['time']}: {'PASS' if t['passed'] else 'FAIL'}" for t in s["selftests"]]
+        lines += [
+            "",
+            "Supervisor review:",
+            f"  reviewed results: {fb['reviewed']}",
+            f"  false alarms:     {fb['false_alarms']}",
+            f"  missed defects:   {fb['missed_defects']}",
+            f"  confirmed:        {fb['confirmed']}  ({fb['accuracy_of_reviewed_percent']} % of reviewed)",
+        ]
+    if len(s.get("model_versions", {})) > 1:  # continuous improvement: compare the versions
+        lines += ["", "Model versions (false alarms = parts accepted as good by the operator):"]
+        for key, v in s["model_versions"].items():
+            rate = f"{v['false_alarm_rate_percent']} %" if v["false_alarm_rate_percent"] is not None else "-"
+            lines.append(
+                f"  {key}: {v['inspected']} parts, {v['nok']} NOK, {v['false_alarms']} false alarms ({rate}), "
+                f"{v['missed_defects']} missed defects"
+            )
     return "\n".join(lines) + "\n"
 
 
@@ -135,8 +182,11 @@ def create_archive(results_dir: str | Path, archive_dir: str | Path, label: str 
 def list_archives(archive_dir: str | Path) -> list[dict]:
     out = []
     for p in sorted(Path(archive_dir).glob("*.zip"), key=lambda x: x.stat().st_mtime, reverse=True):
-        entry = {"file": p.name, "size_bytes": p.stat().st_size,
-                 "created": datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec="seconds")}
+        entry = {
+            "file": p.name,
+            "size_bytes": p.stat().st_size,
+            "created": datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec="seconds"),
+        }
         try:
             with zipfile.ZipFile(p) as zf:
                 entry["summary"] = json.loads(zf.read("summary.json"))

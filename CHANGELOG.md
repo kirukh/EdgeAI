@@ -1,0 +1,77 @@
+# Changelog
+
+## 2.1.0 – continuous improvement (2026-10-12)
+
+Requirement of the supervising professor: the model must improve during operation. Implemented as controlled
+learning from the operator's decisions (human in the loop), not as unsupervised self-learning.
+
+### Added
+- Operator screen: *Within our tolerance – accept as OK* on a NOK result; the part waits for the next model update.
+  *Part is actually DEFECTIVE* (and confirmed NOK results) become test parts for the release check.
+- `qc/learning.py`: model update after `learning.update_after` accepted parts (default 5) or by button, trained in
+  the background while the inspection continues; release check (every known defective part must still be detected);
+  version number + history; *Undo last update* (swap, can itself be undone); accepted parts can be viewed and
+  discarded in the setup area.
+- Local tolerances instead of global thresholds (`methods.py`): accepted hole deviations widen only that hole's
+  tolerance (deviation + k·σ); grey-value and ML deviations become tolerance maps only where the accepted part was
+  conspicuous. Nominal geometry, mean image and thresholds are learned from the normal good parts only.
+  Test: offset 8–9 px at the accepted hole 100 % → 0 % NOK; 18 px, other hole, scratches and good parts unchanged.
+- Model version in the inspection and feedback logs; the batch summary compares the versions (false alarm rate).
+- 11 tests (`tests/test_learning.py`); 72 tests in total, 91 % coverage; ruff 0 findings, mypy 0 errors,
+  no function above complexity 15.
+
+### Unchanged
+- Without accepted parts the inspection is identical to 2.0.0 (golden master, 250 parts: 0 differences).
+- Models of 2.0 load (no learned tolerances).
+
+## 2.0.0 – core version (2026-10-08)
+
+Goal: "as compact as possible, but as robust and accurate as possible". The inspection itself is unchanged –
+verified with a golden-master comparison of 250 synthetic parts (4 part types, front and backlight): identical
+OK/NOK decisions, defect types and reference screening; scores differ by at most 1·10⁻⁶ (floating-point noise
+of the parallel matrix maths – version 1 differs from itself by the same amount between two runs).
+
+### Removed (not needed for the task – KISS/YAGNI)
+- Dual light (backlight + front light per part), incl. light switching
+- Self-learning during operation (collected parts, background training, safety checks, undo)
+- Reference part self-test
+- GPIO outputs (reject, lamps) – handling of NOK parts comes later
+- Checkerboard calibration → replaced by one scale value `camera.mm_per_px`
+- Retraining with other methods from the UI (use `qc evaluate` to compare methods)
+
+### Structure
+- `QCSystem` (700 lines + 3 mixins sharing ~105 attributes) → coordinator plus components with one
+  responsibility each: `CameraSetup`, `TeachIn`, `inspect_part`/`vote`, `ResultStore`, `DriftMonitor`
+- `Recipe` merged into `QCModel` (sensitivity and camera profile are stored with the model)
+- Web UI: 370-line `create_app` → package `qc/web` with two Flask blueprints (operator / setup) and `auth.py`
+- `QCModel.train` split into prepare → screen → report (`FitResult` instead of temporary attributes)
+- `GeometryMethod.fit/score` split into named steps
+- Command line moved to `qc/cli.py`; `main.py` stays as entry point (autostart unchanged)
+- Inspection runs outside the lock → the web UI no longer waits for an inspection on the Pi 3
+
+### Security
+- CSRF protection: modifying requests need the `X-QC-Client` header
+- PIN brute-force lockout per device instead of global (no lock-out of the technician)
+- Security headers (CSP, X-Frame-Options, nosniff, Referrer-Policy, no-store for the API)
+- Training report and all setup functions require the setup PIN
+
+### Robustness
+- Parts that could not be inspected (Pi overloaded) are logged as `NOT_INSPECTED` and counted in the batch summary
+- `config.json` and single-light models of version 1 still load; removed config sections are reported, not fatal
+
+### Code standards
+- `pyproject.toml` (PEP 621) with pytest, coverage, ruff and mypy configuration
+- PEP 8 formatting (ruff format), 0 lint findings, 0 mypy errors, cyclomatic complexity ≤ 15 everywhere
+- 61 tests (was 67, of which 16 covered removed features), 90 % coverage
+
+| Metric | 1.x | 2.0 |
+|---|---|---|
+| Python statements | 4 603 | 3 607 (−22 %) |
+| Lint findings (same rule set) | 330 | 0 |
+| mypy errors | 353 | 0 |
+| Functions rated D/E/F (radon) | 9 | 0 |
+| Largest function | 369 lines | 77 lines |
+| Test coverage | – | 90 % |
+
+## 1.x – full version
+Reference screening (leave-one-out) added; see README, section "Reference screening".

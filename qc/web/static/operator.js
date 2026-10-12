@@ -1,4 +1,4 @@
-// Operator screen: big OK/NOK, start/stop, teach-in assistant, finish batch, reference check.
+// Operator screen: big OK/NOK, start/stop, teach-in assistant, finish batch.
 // Loaded last: also starts the page (view selection + status polling).
 // ======================================================== operator view
 let view = "simple", wiz = null, sSel = null, sShown = null, sLastId = null, sModelsKey = "";
@@ -10,7 +10,7 @@ function setView(v) {
   const on = v === "simple" ? $("sLive") : $("live"), off = v === "simple" ? $("live") : $("sLive");
   off.removeAttribute("src"); on.src = "stream.mjpg?" + Date.now();       // only one camera stream at a time
   if (v === "simple") {
-    if (setupToken) fetch("api/setup/lock", { method: "POST", headers: { "X-Setup-Token": setupToken, "X-QC-Token": token } });
+    if (setupToken) fetch("api/setup/lock", { method: "POST", headers: headers() });
     setupToken = ""; try { sessionStorage.removeItem("qc-setup"); } catch (e) {}
   }
 }
@@ -47,26 +47,33 @@ function sShow(r) {
             $("sWhy").innerHTML = ""; $("sLastWrap").classList.add("hidden"); $("sWrongRow").classList.add("hidden"); return; }
   const txt = r.status === "NO_PART" ? "NO PART" : r.status;
   big.className = "big " + r.status;
-  big.innerHTML = `${txt}<small>${esc(r.model)} · ${r.timestamp.slice(11, 19)}${r.selftest ? " · reference check" : ""}</small>`;
+  big.innerHTML = `${txt}<small>${esc(r.model)} · ${r.timestamp.slice(11, 19)}</small>`;
   $("sWhy").innerHTML = plainDefects(r.defects).map((t) => `<li><b>${esc(t)}</b></li>`).join("");
-  $("sLastWrap").classList.toggle("hidden", !(r.channels || []).length);
-  if ((r.channels || []).length) $("sLast").src = `api/results/${r.image_id}/0/overlay.jpg`;
-  const canFb = (r.status === "OK" || r.status === "NOK") && !r.selftest;
+  $("sLastWrap").classList.toggle("hidden", !r.has_image);
+  if (r.has_image) $("sLast").src = `api/results/${r.image_id}/overlay.jpg`;
+  const canFb = r.status === "OK" || r.status === "NOK";
   $("sWrongRow").classList.toggle("hidden", !canFb);
   if (canFb) {
-    $("sWrong").textContent = r.status === "NOK" ? "Part is actually GOOD" : "Part is actually DEFECTIVE";
-    $("sWrong").disabled = r.feedback === "false_alarm" || r.feedback === "missed";
-    $("sWrongState").textContent = r.feedback === "false_alarm" || r.feedback === "missed" ? "✓ noted – thank you" : "";
+    const done = r.feedback === "false_alarm" || r.feedback === "missed";
+    $("sWrong").textContent = r.status === "NOK" ? "Within our tolerance – accept as OK" : "Part is actually DEFECTIVE";
+    $("sWrong").disabled = done;
+    $("sWrongState").textContent = !done ? "" : r.feedback === "missed" ? "✓ noted – kept as test part"
+      : r.waiting ? `✓ accepted – learned with the next update (${r.waiting}${r.update_after ? "/" + r.update_after : ""})` : "✓ accepted";
   }
 }
+// "Result wrong?": an accepted NOK part teaches the model this deviation (learning.py); a part the
+// operator marks as defective becomes a test part every future model version must still detect.
 $("sWrong").onclick = async () => {
   const r = sShown; if (!r) return;
-  const q = r.status === "NOK" ? "This part was rated NOK but is GOOD?\nIt will be used to improve the model."
-                               : "This part was rated OK but is DEFECTIVE?\nTake it out of the good parts.";
+  const q = r.status === "NOK"
+    ? "Accept this part as GOOD?\n\nOnly if the deviation is within your company's tolerance: the model learns it and " +
+      "accepts similar parts after the next update. Other defects stay detected."
+    : "This part was rated OK but is DEFECTIVE?\n\nTake it out of the good parts. It is kept as a test part – " +
+      "every future model version must detect it.";
   if (!confirm(q)) return;
-  const res = await api(`api/results/${r.image_id}/feedback`, "POST",
-                        { verdict: r.status === "NOK" ? "ok" : "nok", add_reference: r.status === "NOK" });
-  r.feedback = res.outcome; sShow(r); toast("Noted – thank you", "ok");
+  const res = await api(`api/results/${r.image_id}/feedback`, "POST", { verdict: r.status === "NOK" ? "ok" : "nok" });
+  Object.assign(r, { feedback: res.outcome, waiting: res.waiting, update_after: res.update_after });
+  sShow(r); toast(res.outcome === "false_alarm" ? "Accepted – the model learns this deviation" : "Noted – thank you", "ok");
 };
 
 const STEP_LABEL = { starting: "starting", "white balance": "white balance", exposure: "brightness", focus: "focus",
@@ -98,23 +105,18 @@ $("sDots").onclick = (e) => {
 };
 
 $("sStart").onclick = async () => {
-  if (status.mode === "inspecting" || status.mode === "selftest") return api("api/inspect/stop", "POST");
+  if (status.mode === "inspecting") return api("api/inspect/stop", "POST");
   const slug = $("sModel").value;
   if (!slug) return toast("Select a part first (or teach in a new one).");
   await api("api/inspect/start", "POST", { model: slug });
 };
 $("sCapture").onclick = () => api("api/capture", "POST");
-$("sCheck").onclick = async () => {
-  if (!status.model) return toast("Select a part first.");
-  if (status.mode === "inspecting") await api("api/inspect/stop", "POST");
-  api("api/selftest/start", "POST");
-};
 $("sBatch").onclick = async () => {
   const parts = status.counts.OK + status.counts.NOK;
   const label = prompt(`Finish batch?\n${parts} part(s) will be saved as a ZIP file and the counters reset.\n\nBatch name:`,
                        status.model?.name || "batch");
   if (label === null) return;
-  if (status.mode === "inspecting" || status.mode === "selftest") await api("api/inspect/stop", "POST");
+  if (status.mode === "inspecting") await api("api/inspect/stop", "POST");
   const r = await api("api/archives", "POST", { label });
   sSel = null; sShow(null); sDots(); lastImageId = null; toast(`Batch saved: ${r.file}`, "ok");
 };
@@ -229,7 +231,7 @@ function renderWiz(s) {
     el.innerHTML = `<h2>Creating the model …</h2><p>Please wait a moment.</p><div class="progress"><i style="width:100%"></i></div>`;
   } else if (wiz.step === "done" && el.dataset.step !== "done") {
     el.innerHTML = `<div class="big OK" style="font-size:40px">✓ READY<small>“${esc(wiz.name)}” has been taught in</small></div>
-      <p>Tip: check it once with a known good and a known defective part (“Reference part check”).</p>
+      <p>Tip: check it once with a known good and a known defective part.</p>
       <div class="bigbtns"><button class="go wide" id="wGo">▶ Start inspection</button><button class="wide" id="wClose">Close</button></div>`;
     $("wGo").onclick = async () => { await api("api/inspect/start", "POST", {}); wiz = null; sModelsKey = ""; renderWiz(status); };
     $("wClose").onclick = () => { wiz = null; sModelsKey = ""; renderWiz(status); };
@@ -238,32 +240,25 @@ function renderWiz(s) {
 }
 
 function renderSimple(s) {
-  const busy = { camera_setup: "Adjusting camera", learning: "Teaching in", training: "Creating model", selftest: "Reference check" }[s.mode];
+  const busy = { camera_setup: "Adjusting camera", learning: "Teaching in", training: "Creating model" }[s.mode];
   $("sState").textContent = s.mode === "inspecting" ? "● Inspection running" : busy || "Stopped";
   $("sState").className = "s-state " + (s.mode === "inspecting" ? "run" : busy ? "busy" : "");
-  const notes = [...(s.notices || [])];
-  if (s.mode === "selftest" && s.selftest.active)
-    notes.unshift({ level: "warn", text: s.selftest.active.step === "good" ? "Reference check 1/2: put the known GOOD reference part on the conveyor."
-                                                                             : "Reference check 2/2: put the known DEFECTIVE reference part on the conveyor." });
+  const notes = s.notices || [];
   $("sNotices").innerHTML = notes.map((n) => `<div class="${n.level}">${n.level === "info" ? "ℹ" : "⚠"} ${esc(n.text)}</div>`).join("");
   $("sModel").disabled = s.mode !== "idle";
-  const running = s.mode === "inspecting" || s.mode === "selftest";
-  $("sStart").textContent = running ? (s.mode === "selftest" ? "■ Cancel reference check" : "■ Stop inspection") : "▶ Start inspection";
+  const running = s.mode === "inspecting";
+  $("sStart").textContent = running ? "■ Stop inspection" : "▶ Start inspection";
   $("sStart").className = (running ? "stop" : "go") + " wide";
   $("sStart").disabled = !running && (s.mode !== "idle" || !s.model);
   $("sTeach").disabled = !["idle", "inspecting"].includes(s.mode);
-  $("sCheck").disabled = s.mode !== "idle" && s.mode !== "inspecting" || !s.model;
   $("sBatch").disabled = ["training", "learning"].includes(s.mode) || !(s.counts.OK + s.counts.NOK);
-  const active = ["learning", "inspecting", "selftest"].includes(s.mode);
+  const active = ["learning", "inspecting"].includes(s.mode);
   $("sCapture").classList.toggle("hidden", !active);
   $("sTrig").textContent = !active ? "" : s.continuous ? (s.armed ? "Waiting for the next part …" : "Part captured") : "";
   const c = s.counts, total = c.OK + c.NOK;
   $("sOK").textContent = c.OK; $("sNOK").textContent = c.NOK;
   $("sRate").textContent = total ? `${(100 * c.NOK / total).toFixed(1)} %` : "–";
-  const m = s.model, st = s.settings;
-  $("sLearnInfo").textContent = !m || !st.self_learning ? "" : s.self_learning_running ? "⟳ The model is improving itself right now – inspection continues."
-    : st.self_learning_auto ? `The model improves itself with good parts (${m.collected}/${st.self_learning_every} collected).` : "";
-  const key = (m?.slug || "") + s.mode + (m?.learned ?? "");
+  const key = (s.model?.slug || "") + s.mode;
   if (key !== sModelsKey) { sModelsKey = key; sLoadModels(s); }
   if (s.last_result && s.last_result.image_id !== sLastId) {
     sLastId = s.last_result.image_id; if (!sSel) sShow(s.last_result); sDots();
@@ -281,7 +276,6 @@ async function poll() {
 }
 (async () => {
   opts = await (await fetch("api/options")).json();
-  methodSettings();
   let unlocked = false;
   if (setupToken) unlocked = (await (await fetch("api/setup/check", { headers: { "X-Setup-Token": setupToken } })).json()).unlocked;
   setView(unlocked ? "expert" : "simple");

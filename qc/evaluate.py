@@ -10,6 +10,7 @@ labelled test set:
 * detection rate per defect type (defective part → NOK, *recall*)
 * mean inspection time
 """
+
 from __future__ import annotations
 
 import csv
@@ -42,8 +43,12 @@ def default_grid(base: MethodConfig) -> list[tuple[str, MethodConfig]]:
     for r in ["norm", "edges", "canny", "binary"]:
         grid.append((f"pca[{r}]", replace(base, methods=["pca"], pca_representation=r)))
     grid.append(("geometry + diff[norm]", replace(base, methods=["geometry", "diff"], diff_representation="norm")))
-    grid.append(("geometry + diff[norm] + pca[edges]",
-                 replace(base, methods=["geometry", "diff", "pca"], diff_representation="norm", pca_representation="edges")))
+    grid.append(
+        (
+            "geometry + diff[norm] + pca[edges]",
+            replace(base, methods=["geometry", "diff", "pca"], diff_representation="norm", pca_representation="edges"),
+        )
+    )
     return grid
 
 
@@ -69,9 +74,13 @@ def load_folder(folder: str | Path) -> list[np.ndarray]:
     return [cv2.imread(str(p)) for p in sorted(Path(folder).rglob("*")) if p.suffix.lower() in IMAGE_EXT]
 
 
-def evaluate(train: list[np.ndarray], test: list[tuple[np.ndarray, str]],
-             grid: list[tuple[str, MethodConfig]], loc: LocalizationConfig | None = None,
-             progress=print) -> list[EvalRow]:
+def evaluate(
+    train: list[np.ndarray],
+    test: list[tuple[np.ndarray, str]],
+    grid: list[tuple[str, MethodConfig]],
+    loc: LocalizationConfig | None = None,
+    progress=print,
+) -> list[EvalRow]:
     loc = loc or LocalizationConfig()
     labels = sorted({lbl for _, lbl in test if lbl != "ok"})
     rows = []
@@ -95,8 +104,9 @@ def evaluate(train: list[np.ndarray], test: list[tuple[np.ndarray, str]],
                 hits[lbl].append(nok)
         per = {lbl: float(np.mean(v)) if v else float("nan") for lbl, v in hits.items()}
         all_hits = [h for v in hits.values() for h in v]
-        row = EvalRow(name, fp / max(1, n_ok), float(np.mean(all_hits)) if all_hits else float("nan"),
-                      per, float(np.mean(times)))
+        row = EvalRow(
+            name, fp / max(1, n_ok), float(np.mean(all_hits)) if all_hits else float("nan"), per, float(np.mean(times))
+        )
         rows.append(row)
         if progress:
             progress(f"  {name:38s} false alarms {row.fpr * 100:5.1f} %  detection {row.recall * 100:5.1f} %")
@@ -105,14 +115,18 @@ def evaluate(train: list[np.ndarray], test: list[tuple[np.ndarray, str]],
 
 def to_markdown(rows: list[EvalRow], title: str = "") -> str:
     labels = sorted({k for r in rows for k in r.per_defect})
-    head = ["Configuration", "False alarms", "Detection (all)"] + labels + ["ms/part"]
+    head = ["Configuration", "False alarms", "Detection (all)", *labels, "ms/part"]
     lines = [f"### {title}" if title else "", "", "| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
 
     def pct(v):
         return "–" if v != v else f"{v * 100:.0f} %"
 
     for r in rows:
-        cells = [r.config, pct(r.fpr), pct(r.recall)] + [pct(r.per_defect.get(k, float("nan"))) for k in labels] + [f"{r.time_ms:.0f}"]
+        cells = (
+            [r.config, pct(r.fpr), pct(r.recall)]
+            + [pct(r.per_defect.get(k, float("nan"))) for k in labels]
+            + [f"{r.time_ms:.0f}"]
+        )
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines).strip() + "\n"
 
@@ -125,17 +139,31 @@ def to_csv(rows: list[EvalRow], path: str | Path, extra: dict | None = None) -> 
         w = csv.writer(f)
         extra = extra or {}
         if new:
-            w.writerow(list(extra) + ["config", "fpr", "recall"] + labels + ["time_ms"])
+            w.writerow([*extra, "config", "fpr", "recall", *labels, "time_ms"])
         for r in rows:
-            w.writerow(list(extra.values()) + [r.config, r.fpr, r.recall] + [r.per_defect.get(k, "") for k in labels] + [r.time_ms])
+            w.writerow(
+                list(extra.values())
+                + [r.config, r.fpr, r.recall]
+                + [r.per_defect.get(k, "") for k in labels]
+                + [r.time_ms]
+            )
 
 
 def synthetic_sets(part_type: str, lighting: str, n_train=15, n_good=40, n_per_defect=10, seed=0, any_angle=False):
     from . import synthetic as S
 
     rng = np.random.default_rng(seed)
-    train = [S.compose(S.make_part(part_type, None, rng), S.random_pose(rng, any_angle=any_angle), lighting, rng=rng) for _ in range(n_train)]
-    test = [(S.compose(S.make_part(part_type, None, rng), S.random_pose(rng, any_angle=any_angle), lighting, rng=rng), "ok") for _ in range(n_good)]
+    train = [
+        S.compose(S.make_part(part_type, None, rng), S.random_pose(rng, any_angle=any_angle), lighting, rng=rng)
+        for _ in range(n_train)
+    ]
+    test = [
+        (S.compose(S.make_part(part_type, None, rng), S.random_pose(rng, any_angle=any_angle), lighting, rng=rng), "ok")
+        for _ in range(n_good)
+    ]
     for d in S.DEFECTS:
-        test += [(S.compose(S.make_part(part_type, d, rng), S.random_pose(rng, any_angle=any_angle), lighting, rng=rng), d) for _ in range(n_per_defect)]
+        test += [
+            (S.compose(S.make_part(part_type, d, rng), S.random_pose(rng, any_angle=any_angle), lighting, rng=rng), d)
+            for _ in range(n_per_defect)
+        ]
     return train, test
