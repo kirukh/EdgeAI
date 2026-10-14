@@ -384,58 +384,72 @@ def test_model_of_the_full_version_still_loads(tmp_path):
     assert again.inspect(img, False).status == "NOK"
 
 
+# ------------------------------------------------------------------ camera sources
+class FakeRequest:
+    """Stand-ins for picamera2 – the Pi camera code is normally only runnable on a Pi."""
+
+    def make_array(self, name):
+        return np.zeros((480, 640, 3), np.uint8)
+
+    def get_metadata(self):
+        return {"SensorTimestamp": time.monotonic_ns() - 20_000_000, "ColourGains": (1.5, 1.7)}
+
+    def release(self):
+        pass
+
+
+class FakePicamera2:
+    camera_controls: ClassVar[dict] = {
+        "ScalerCrop": ((0, 0, 64, 64), (0, 0, 3280, 2464), (0, 0, 3280, 2464)),
+        "ExposureTime": (1, 1, 1),
+    }
+    camera_properties: ClassVar[dict] = {"Model": "imx219", "PixelArraySize": (3280, 2464)}
+
+    def __init__(self):
+        self.controls, self.video_kwargs = {}, None
+
+    def create_video_configuration(self, **kw):
+        self.video_kwargs = kw
+        return kw
+
+    def configure(self, c):
+        pass
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def close(self):
+        pass
+
+    def set_controls(self, d):
+        self.controls.update(d)
+
+    def capture_request(self):
+        return FakeRequest()
+
+    def capture_metadata(self):
+        return {"ScalerCrop": (0, 0, 3280, 2464), "LensPosition": self.controls.get("LensPosition", 2.0)}
+
+    def autofocus_cycle(self):
+        self.controls["AfCycle"] = True
+
+    def camera_configuration(self):
+        return {"sensor": {"output_size": (1640, 1232)}}
+
+
+class FakeAutofocusPicamera2(FakePicamera2):
+    """Camera Module 3: with focus motor."""
+
+    camera_controls: ClassVar[dict] = {**FakePicamera2.camera_controls, "AfMode": (0, 2, 0)}
+
+
 def test_pi_camera_source_against_fake_picamera2(monkeypatch):
     """The Pi camera code (normally only runnable on a Pi) against a stand-in for picamera2."""
     import sys
     import types
-
-    class FakeRequest:
-        def make_array(self, name):
-            return np.zeros((480, 640, 3), np.uint8)
-
-        def get_metadata(self):
-            return {"SensorTimestamp": time.monotonic_ns() - 20_000_000, "ColourGains": (1.5, 1.7)}
-
-        def release(self):
-            pass
-
-    class FakePicamera2:
-        camera_controls: ClassVar[dict] = {
-            "ScalerCrop": ((0, 0, 64, 64), (0, 0, 3280, 2464), (0, 0, 3280, 2464)),
-            "ExposureTime": (1, 1, 1),
-        }
-        camera_properties: ClassVar[dict] = {"Model": "imx219", "PixelArraySize": (3280, 2464)}
-
-        def __init__(self):
-            self.controls, self.video_kwargs = {}, None
-
-        def create_video_configuration(self, **kw):
-            self.video_kwargs = kw
-            return kw
-
-        def configure(self, c):
-            pass
-
-        def start(self):
-            pass
-
-        def stop(self):
-            pass
-
-        def close(self):
-            pass
-
-        def set_controls(self, d):
-            self.controls.update(d)
-
-        def capture_request(self):
-            return FakeRequest()
-
-        def capture_metadata(self):
-            return {"ScalerCrop": (0, 0, 3280, 2464)}
-
-        def camera_configuration(self):
-            return {"sensor": {"output_size": (1640, 1232)}}
 
     monkeypatch.setitem(sys.modules, "picamera2", types.SimpleNamespace(Picamera2=FakePicamera2))
     monkeypatch.setattr(time, "sleep", lambda s: None)
@@ -454,3 +468,55 @@ def test_pi_camera_source_against_fake_picamera2(monkeypatch):
     assert cam.cam.controls["ScalerCrop"] == (820, 616, 1640, 1232) and cam.crop == (0.25, 0.25, 0.5, 0.5)
     cam.set_exposure(800, 2.0)
     assert cam.cam.controls["ExposureTime"] == 800 and cam.cam.controls["AnalogueGain"] == 2.0
+
+
+def test_pi_camera_with_focus_motor(monkeypatch):
+    """Camera Module 3: one autofocus run at start (or a fixed lens position), autofocus on the part."""
+    import sys
+    import types
+
+    monkeypatch.setitem(sys.modules, "picamera2", types.SimpleNamespace(Picamera2=FakeAutofocusPicamera2))
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    from qc.camera import PiCameraSource
+    from qc.config import CameraConfig
+
+    cam = PiCameraSource(CameraConfig(source="pi", exposure_us=0))
+    assert cam.has_autofocus and cam.cam.controls["AfCycle"] and "focus fixed at 2.00 dioptres (≈ 50 cm)" in cam.info
+    assert "AeEnable" not in cam.cam.controls  # exposure_us = 0 → automatic exposure
+    cam = PiCameraSource(CameraConfig(source="pi", lens_position=4.0))
+    assert cam.cam.controls["AfMode"] == 0 and "4.00 dioptres" in cam.info  # fixed lens position
+    cam.set_lens(5.0)
+    assert cam.cam.controls["LensPosition"] == 5.0
+    cam.set_colour_gains((1.2, 1.4))
+    assert cam.cam.controls["ColourGains"] == (1.2, 1.4) and cam.cam.controls["AwbEnable"] is False
+    cam.awb_start()
+    assert cam.cam.controls["AwbEnable"] is True
+    cam.set_crop((0.5, 0.5, 0.5, 0.5))
+    cam.af_start((0.0, 0.0, 0.5, 0.5))  # window on a quarter of the zoomed image
+    assert cam.cam.controls["AfWindows"] == [(1640, 1232, 820, 616)] and cam.cam.controls["AfTrigger"] == 0
+    assert cam.af_state() == ("scanning", None)
+    cam.last_metadata = {"AfState": 2, "LensPosition": 3.5}
+    assert cam.af_state() == ("focused", 3.5)
+    cam.last_metadata = {"AfState": 3}
+    assert cam.af_state() == ("failed", None)
+    cam.close()
+
+
+def test_camera_sources_from_the_config(tmp_path):
+    from qc.camera import FolderSource, SimulatorSource, open_camera
+    from qc.config import CameraConfig
+
+    assert isinstance(open_camera(CameraConfig(source="sim")), SimulatorSource)
+    with pytest.raises(RuntimeError, match="No images"):
+        open_camera(CameraConfig(source=f"folder:{tmp_path}"))
+    for i in range(2):
+        cv2.imwrite(str(tmp_path / f"{i}.png"), np.full((48, 64, 3), i, np.uint8))
+    src = open_camera(CameraConfig(source=f"folder:{tmp_path}"))
+    assert isinstance(src, FolderSource) and not src.continuous and src.current_file.name == "0.png"
+    assert src.next_part()[0, 0, 0] == 0 and src.next_part()[0, 0, 0] == 1 and src.current_file.name == "1.png"
+    assert src.next_part()[0, 0, 0] == 0  # loops by default
+    assert FolderSource(str(tmp_path), loop=False).next_part() is not None
+    with pytest.raises(ValueError, match="Unknown camera source"):
+        open_camera(CameraConfig(source="ftp:camera"))
+    with pytest.raises(RuntimeError, match="Could not open camera"):
+        open_camera(CameraConfig(source="usb:/dev/does-not-exist"))

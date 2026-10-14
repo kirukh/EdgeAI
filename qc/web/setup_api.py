@@ -37,19 +37,19 @@ def model_sensitivity(slug: str):
 
 @bp.post("/models/<slug>/update")
 def model_update(slug: str):
-    system().update_model_now(slug)
+    system().improve.update_now(slug)
     return ok()
 
 
 @bp.post("/models/<slug>/undo")
 def model_undo(slug: str):
-    system().undo_update(slug)
+    system().improve.undo(slug)
     return ok()
 
 
 @bp.get("/models/<slug>/waiting")
 def waiting(slug: str):
-    return jsonify(system().waiting_parts(slug))
+    return jsonify(system().improve.waiting(slug))
 
 
 @bp.get("/models/<slug>/waiting/<name>.png")
@@ -63,7 +63,7 @@ def waiting_image(slug: str, name: str):
 
 @bp.delete("/models/<slug>/waiting/<name>")
 def waiting_discard(slug: str, name: str):
-    system().discard_waiting(slug, name)
+    system().improve.discard(slug, name)
     return ok()
 
 

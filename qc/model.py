@@ -438,7 +438,7 @@ class QCModel:
         tmp = path.with_name(path.name + ".tmp")
         shutil.rmtree(tmp, ignore_errors=True)
         (tmp / "refs").mkdir(parents=True)
-        arrays = {"ref_norm": self.ref_norm}
+        arrays: dict[str, Any] = {"ref_norm": self.ref_norm}
         for k, m in self.methods.items():
             _, arr = m.state()
             arrays.update({f"{k}__{a}": v for a, v in arr.items()})
@@ -533,7 +533,8 @@ class QCModel:
             return list(self._ref_frames)
         if self._refs_dir is None or not self._refs_dir.exists():
             return []
-        return [cv2.imread(str(p)) for p in sorted(self._refs_dir.glob("*.png"))]
+        images = (cv2.imread(str(p)) for p in sorted(self._refs_dir.glob("*.png")))
+        return [img for img in images if img is not None]
 
     # ------------------------------------------------------------------ info
     def warnings(self) -> list[str]:

@@ -81,3 +81,42 @@ def test_evaluation_tool_produces_a_table():
     md = E.to_markdown(rows, "smoke")
     assert "| geometry |" in md and "False alarms" in md
     assert rows[0].per_defect["missing"] == 1.0  # a missing hole is always found
+
+
+def test_operator_screen_endpoints(make_system):
+    """Live image, options, PIN state, results with images and feedback – as the operator page uses them."""
+    s = make_system()
+    rng = np.random.default_rng(6)
+    QCModel.train("Plate", shots("A", "front", 6, rng), LocalizationConfig(), MethodConfig()).save(
+        s.cfg.storage.models_dir
+    )
+    c = web_client(s)
+    assert c.get("/snapshot.jpg").status_code == 404  # no frame yet
+    s._update_preview(s._read())
+    assert c.get("/snapshot.jpg").data[:2] == b"\xff\xd8"  # JPEG
+    stream = c.get("/stream.mjpg", buffered=False)
+    assert next(iter(stream.response)).startswith(b"--frame\r\nContent-Type: image/jpeg")
+    stream.close()
+    opts = c.get("/api/options").json
+    assert set(opts["methods"]) == {"geometry", "diff", "pca"} and opts["decision"] == "fusion"
+
+    assert c.get("/api/setup/check").json == {"unlocked": False, "pin_required": True}
+    h = _unlocked(c, s.cfg.ui.setup_pin)
+    assert c.get("/api/setup/check", headers=h).json["unlocked"]
+    assert c.post("/api/setup/lock", headers=h).json["ok"]
+    assert not c.get("/api/setup/check", headers=h).json["unlocked"]  # token no longer valid
+
+    assert c.post("/api/inspect/start", json={"model": "Plate"}).json["ok"]
+    assert c.post("/api/camera-setup/start").status_code == 400  # only from idle
+    for f in shots("A", "front", 1, rng, "missing"):
+        s._handle_part([f])
+    rid = c.get("/api/results").json[0]["image_id"]
+    assert c.get(f"/api/results/{rid}/overlay.jpg").status_code == 200
+    assert c.get(f"/api/results/{rid}/detail.jpg").status_code == 200
+    assert c.get(f"/api/results/{rid}/other.jpg").status_code == 404
+    assert c.get("/api/results/nope/overlay.jpg").status_code == 404
+    r = c.post(f"/api/results/{rid}/feedback", json={"verdict": "nok"}).json
+    assert r["ok"] and r["outcome"] == "confirmed_nok"
+    assert c.post("/api/inspect/stop").json["ok"]
+    assert c.post("/api/camera-setup/cancel").json["ok"] and s.mode == "idle"
+    assert c.get("/api/archives/nope.zip").status_code == 404

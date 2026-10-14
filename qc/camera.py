@@ -24,6 +24,14 @@ from .config import CameraConfig
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 
 
+def read_image(path: str | Path) -> np.ndarray:
+    """BGR image from a file; a clear error instead of ``None`` for a missing or damaged file."""
+    img = cv2.imread(str(path))
+    if img is None:
+        raise ValueError(f"Could not read image '{path}'")
+    return img
+
+
 class CameraSource:
     """Base class: ``read()`` returns the next BGR image (or ``None``)."""
 
@@ -286,6 +294,7 @@ class SimulatorSource(CameraSource):
 
     name = "Simulator"
     MM_PER_PX = 0.25  # simulated scale at 640 px image width (plate A ≈ 75 × 42 mm)
+    NOISE_FRAMES = 8  # sensor noise frames reused in turn (new random numbers per frame cost ~14 ms)
 
     def __init__(self, cfg: CameraConfig, seed: int | None = None):
         from . import synthetic
@@ -307,6 +316,8 @@ class SimulatorSource(CameraSource):
         self.hold = False  # part lies still in the middle (camera setup)
         self._af: int | None = None  # frames until the simulated autofocus run is finished
         self.last_metadata = {}
+        h, w = self.size[1], self.size[0]
+        self._noise = [self.rng.normal(0, 2.5, (h, w, 3)).astype(np.float32) for _ in range(self.NOISE_FRAMES)]
         self._spawn()
         self.last_time = 0.0
 
@@ -412,6 +423,7 @@ class SimulatorSource(CameraSource):
             self.rng,
             layers=self._layer(self.light),
             background=self._background(self.light),
+            noise=self._noise[int(self.rng.integers(self.NOISE_FRAMES))],
         )
         k = self.exposure[0] * self.exposure[1] / self.NOMINAL
         if abs(k - 1.0) > 1e-3:
