@@ -176,15 +176,14 @@ def test_operator_acceptance_updates_the_model_during_inspection(make_system):
     noks = [h["image_id"] for h in s.results.history if h["status"] == "NOK"][:2]
     assert s.feedback(noks[0], "ok")["waiting"] == 1
     assert s.feedback(noks[1], "ok")["waiting"] == 2  # → update starts in the background
-    wait(lambda: s.last_update is not None and not s._update_running, 120)
-    assert s.last_update["released"], s.last_update
+    wait(lambda: s.improve.last is not None and not s.improve.running, 120)
+    assert s.improve.last["released"], s.improve.last
     assert s.mode == "inspecting" and s.model.version == 2  # inspection was never interrupted
-    n = len(s.results.history)
-    wait(lambda: len(s.results.history) > n, 60)
-    assert s.results.history[0]["model_version"] == 2
+    # a part already inspected with version 1 when the update was released may still be logged as 1
+    wait(lambda: s.results.history[0]["model_version"] == 2, 60)
     s.stop_inspection()
     assert next(m for m in s.list_models() if m["slug"] == "Plate")["has_previous"]
-    s.undo_update("Plate")
+    s.improve.undo("Plate")
     assert s.model.version == 1
 
 

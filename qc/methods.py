@@ -142,7 +142,7 @@ def robust_outliers(values, floor: float, k: float, factor: float = 1.0) -> list
 
 def _max_component_area(binary: np.ndarray) -> float:
     n, _, stats, _ = cv2.connectedComponentsWithStats(binary.astype(np.uint8), connectivity=8)
-    return float(stats[1:, cv2.CC_STAT_AREA].max()) if n > 1 else 0.0
+    return float(np.max(stats[1:, cv2.CC_STAT_AREA])) if n > 1 else 0.0
 
 
 class Method:
@@ -196,7 +196,7 @@ def find_holes(a: AlignedPart, min_area: float) -> tuple[list[Hole], np.ndarray]
     k7 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
     inner = cv2.erode(a.filled_mask, k7)
     material = cv2.erode(a.filled_mask, np.ones((3, 3), np.uint8)) > 0  # inside the outline
-    cand = ((a.norm < 0.5) & (inner > 0)).astype(np.uint8) * 255
+    cand: np.ndarray = ((a.norm < 0.5) & (inner > 0)).astype(np.uint8) * 255
     cand = cv2.morphologyEx(cand, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     contours, _ = cv2.findContours(cand, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
     holes = []
@@ -210,6 +210,7 @@ def find_holes(a: AlignedPart, min_area: float) -> tuple[list[Hole], np.ndarray]
         if np.count_nonzero(cand[filled > 0]) / filled_area < 0.6:
             continue
         (_, _), (rw, rh), _ = cv2.minAreaRect(c)
+        bx, by, bw, bh = cv2.boundingRect(c)
         cx, cy, area = _subpixel_moments(a, filled, material)
         holes.append(
             Hole(
@@ -218,7 +219,7 @@ def find_holes(a: AlignedPart, min_area: float) -> tuple[list[Hole], np.ndarray]
                 area=area,
                 eq_d=math.sqrt(4 * area / math.pi),
                 aspect=max(rw, rh) / max(1.0, min(rw, rh)),
-                bbox=cv2.boundingRect(c),
+                bbox=(bx, by, bw, bh),
                 mask=filled > 0,
             )
         )
@@ -450,7 +451,7 @@ class GeometryMethod(Method):
         tmpl = self.hole_masks[i]
         line = cv2.morphologyEx(tmpl, cv2.MORPH_GRADIENT, np.ones((3, 3), np.uint8)) > 0
         band = cv2.dilate(line.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
-        return float(np.count_nonzero(edges[band])) / max(1, np.count_nonzero(line) / 2)
+        return float(np.count_nonzero(edges[band])) / max(1.0, float(np.count_nonzero(line)) / 2)
 
     def _pos_tol(self, e: int, mm_per_px: float | None) -> float:
         c = self.cfg
@@ -747,7 +748,7 @@ class PCAMethod(Method):
                 loo, self.cfg.pca_margin * float(np.median(loo)), self.cfg.screen_k, self.cfg.pca_standalone
             ):
                 self._flag(normal[i], f"ML anomaly compared with the other references (residual {loo[i]:.3f})")
-            self.threshold = float(max(self.cfg.pca_margin * max(loo), np.mean(loo) + 4 * np.std(loo)))
+            self.threshold = max(self.cfg.pca_margin * float(max(loo)), float(np.mean(loo) + 4 * np.std(loo)))
         else:
             self.threshold = self.cfg.pca_residual_threshold
         if acc:  # accepted deviations are tolerated where they are – the global threshold stays
@@ -781,7 +782,7 @@ class PCAMethod(Method):
                     )
                 )
             if not defects:
-                defects.append(Defect("ANOMALY", self.name, _bbox_from_mask(big >= big.max() * 0.9), "", score))
+                defects.append(Defect("ANOMALY", self.name, _bbox_from_mask(big >= np.max(big) * 0.9), "", score))
         heat = np.clip(big / (2 * thr), 0, 1).astype(np.float32)
         return MethodResult(self.name, bool(score < 1.0), float(score), defects, heat)
 

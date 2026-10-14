@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.1.3 – CI, faster tests, code clean-up (2026-10-14)
+
+No change to the inspection: the synthetic evaluation (`qc evaluate --synthetic`, 4 scenarios × 15 configurations)
+gives exactly the same table as 2.1.2.
+
+- **Continuous integration** (`.github/workflows/ci.yml`): `ruff format --check`, `ruff check`, `mypy` and
+  `pytest --cov` on Python 3.11 (Raspberry Pi OS Bookworm) and 3.13 (Trixie) for every pull request and every push
+  to `main`.
+- **Tests 3.5× faster** (158 s → ~45 s on 4 cores): they run in parallel (`pytest-xdist`, one thread per worker –
+  NumPy/OpenCV threads on top of the workers made a parallel run slower than a serial one), and the simulator reuses
+  8 pre-generated sensor noise frames instead of drawing new random numbers for every frame (33 → 11 ms per frame;
+  this also lowers the CPU load of the simulator in the web UI). Training and test data (`synthetic.compose`) are
+  unchanged.
+- **Test coverage 91 % → 94 %** (77 tests): all image representations, `qc evaluate` with own photo folders and CSV
+  output, the Pi camera with focus motor (Camera Module 3) against the picamera2 stand-in, the camera sources from
+  the config, the operator endpoints (live image, PIN state, result images, feedback).
+- **`qc/improvement.py`**: the continuous-improvement logic (operator decisions, background update, release, undo,
+  accepted parts, notices) moved out of `QCSystem` into its own component `ModelImprovement`, like `CameraSetup`
+  (`system.py` 791 → 638 lines). The setup API calls `system.improve.…`.
+- **Type check with current libraries:** `mypy` reported 17 errors against the type information of NumPy 2.5 and
+  OpenCV 5 (earlier runs had not seen it). Fixed with annotations; `read_image()` gives a clear error for an
+  unreadable image in `qc evaluate` instead of failing later.
+- Test fix: `test_operator_acceptance_updates_the_model_during_inspection` failed about once in 10 runs – a part
+  that was already being inspected with version 1 when version 2 was released is correctly logged as version 1;
+  the test now waits for the first part of version 2.
+
 ## 2.1.2 – Raspberry Pi OS Trixie (2026-10-12)
 
 - `deploy/install.sh`: no fixed `numpy<2` any more. On Raspberry Pi OS Trixie (Debian 13, Python 3.13) `picamera2`

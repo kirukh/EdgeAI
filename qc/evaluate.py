@@ -18,10 +18,9 @@ import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-import cv2
 import numpy as np
 
-from .camera import IMAGE_EXT
+from .camera import IMAGE_EXT, read_image
 from .config import LocalizationConfig, MethodConfig
 from .model import QCModel, TrainingError
 
@@ -66,12 +65,12 @@ def load_labeled_folder(test_dir: str | Path) -> list[tuple[np.ndarray, str]]:
             label = rel[1] if len(rel) > 2 else "nok"
         else:
             continue
-        items.append((cv2.imread(str(p)), label))
+        items.append((read_image(p), label))
     return items
 
 
 def load_folder(folder: str | Path) -> list[np.ndarray]:
-    return [cv2.imread(str(p)) for p in sorted(Path(folder).rglob("*")) if p.suffix.lower() in IMAGE_EXT]
+    return [read_image(p) for p in sorted(Path(folder).rglob("*")) if p.suffix.lower() in IMAGE_EXT]
 
 
 def evaluate(

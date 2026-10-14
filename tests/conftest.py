@@ -2,15 +2,27 @@
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Callable
 
+import cv2
 import numpy as np
 import pytest
 
 from qc import synthetic as S
 from qc.camera import SimulatorSource
 from qc.config import AppConfig
+
+
+def pytest_configure(config):
+    """Parallel run (pytest-xdist): one thread per worker – the workers already use all cores, and
+    NumPy/OpenCV threads on top of them make the run three times slower."""
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        from threadpoolctl import threadpool_limits
+
+        threadpool_limits(1)
+        cv2.setNumThreads(1)
 
 
 def shots(

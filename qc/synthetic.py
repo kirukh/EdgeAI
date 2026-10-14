@@ -187,7 +187,7 @@ def render_layers(part: PartInstance, lighting: str, scale: float = 1.0):
     cx, cy = W / 2, H / 2
     rng = np.random.default_rng(part.texture_seed)
 
-    alpha = np.zeros((H, W), np.float32)
+    alpha: np.ndarray = np.zeros((H, W), np.float32)
     pts = poly + np.array([cx, cy])  # shift the polygon (NumPy vector addition)
     cv2.fillPoly(alpha, [(pts * 8).round().astype(np.int32)], 1.0, cv2.LINE_AA, shift=3)
     if part.corner_cut:
@@ -203,15 +203,16 @@ def render_layers(part: PartInstance, lighting: str, scale: float = 1.0):
 
     if lighting == "front":
         base = np.array([182, 178, 172], np.float32)  # BGR, slightly bluish metal
-        streaks = rng.normal(0, 7, (H, 1)).astype(np.float32)
+        streaks: np.ndarray = rng.normal(0, 7, (H, 1)).astype(np.float32)
         streaks = cv2.GaussianBlur(np.repeat(streaks, W, axis=1), (1, 3), 0)
         grad = np.linspace(-10, 10, W, dtype=np.float32)[None, :]
         tex = streaks + grad + rng.normal(0, 3, (H, W)).astype(np.float32)
     else:
         base = np.array([58, 56, 54], np.float32)
         tex = rng.normal(0, 3, (H, W)).astype(np.float32)
-    layer = base[None, None, :] + tex[:, :, None]
+    layer: np.ndarray = base[None, None, :] + tex[:, :, None]
 
+    m: np.ndarray
     for h in part.blind_holes:
         m = np.zeros((H, W), np.float32)
         _draw_hole(m, h, cx, cy, 1.0)
@@ -267,8 +268,12 @@ def compose(
     rng: np.random.Generator | None = None,
     layers=None,
     background: np.ndarray | None = None,
+    noise: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Places the part (pose: cx, cy, angle in degrees) on the belt and simulates camera effects."""
+    """Places the part (pose: cx, cy, angle in degrees) on the belt and simulates camera effects.
+
+    ``noise``: pre-generated sensor noise (σ = 2.5) – the simulator reuses a few frames of it, because
+    drawing new random numbers is the slowest step of a frame."""
     rng = rng or np.random.default_rng()
     w, h = frame_size
     scale = w / 640.0
@@ -284,7 +289,9 @@ def compose(
         frame = frame * (1 - aw) + lw * aw
 
     gain = rng.uniform(0.95, 1.05)  # small lighting fluctuation
-    frame = frame * gain + rng.normal(0, 2.5, frame.shape).astype(np.float32)
+    if noise is None:
+        noise = rng.normal(0, 2.5, frame.shape).astype(np.float32)
+    frame = frame * gain + noise
     frame = cv2.GaussianBlur(np.clip(frame, 0, 255), (0, 0), 0.6)
     return frame.astype(np.uint8)
 

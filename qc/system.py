@@ -2,13 +2,13 @@
 
 ``QCSystem`` coordinates the components and owns the operating mode; the work is done by them:
 
-    CameraSetup (camera_setup.py)  camera profiles, automatic camera setup, focus assistant
-    TeachIn     (teach.py)         reference images of a new part type
-    QCModel     (model.py)         training and inspection of one part type
-    inspect_part (inspection.py)   several images per part, majority vote
-    ResultStore (results.py)       history, counters, feedback, CSV logs
-    learning.py                    continuous improvement from the operator's decisions
-    DriftMonitor (drift.py)        image quality compared with the learning phase
+    CameraSetup      (camera_setup.py)  camera profiles, automatic camera setup, focus assistant
+    TeachIn          (teach.py)         reference images of a new part type
+    QCModel          (model.py)         training and inspection of one part type
+    inspect_part     (inspection.py)    several images per part, majority vote
+    ResultStore      (results.py)       history, counters, feedback, CSV logs
+    ModelImprovement (improvement.py)   continuous improvement from the operator's decisions
+    DriftMonitor     (drift.py)         image quality compared with the learning phase
 
 Two threads do the work, so the live image and the trigger never wait for an inspection::
 
@@ -16,7 +16,8 @@ Two threads do the work, so the live image and the trigger never wait for an ins
     worker thread:  ◄───────────────────────────┘ inspect_part() → results / drift monitor
 
 If the worker cannot keep up (queue full), the part is logged as not inspected and the
-supervisor gets a notice. The web UI (``qc/web``) only calls the public methods.
+supervisor gets a notice. The web UI (``qc/web``) only calls the public methods of the system
+and its components.
 """
 
 from __future__ import annotations
@@ -39,9 +40,10 @@ from .camera import CameraSource, FolderSource, SimulatorSource
 from .camera_setup import CameraSetup
 from .config import AppConfig
 from .drift import DriftMonitor
+from .improvement import ModelImprovement
 from .inspection import inspect_part
-from .learning import KNOWN_BAD, PENDING, LearningStore, release, update_model
-from .model import MIN_REFERENCES, QCModel, has_previous, list_models, model_path, restore_previous
+from .learning import KNOWN_BAD, PENDING, LearningStore
+from .model import MIN_REFERENCES, QCModel, has_previous, list_models, model_path
 from .results import OUTCOME_TEXT, ResultStore
 from .synthetic import PART_TYPES
 from .teach import TeachIn
@@ -92,8 +94,7 @@ class QCSystem:
         self._burst: dict | None = None
         self._last_folder_step = 0.0
         self.folder_interval = 1.0
-        self._update_running = False  # a model update (learning.py) is being trained
-        self.last_update: dict | None = None
+        self.improve = ModelImprovement(cfg, self.lock, lambda: self.model, self._set_model, self.log)
         Path(cfg.storage.models_dir).mkdir(parents=True, exist_ok=True)
         for section in cfg.ignored:
             self.log("warn", f"config.json: section “{section}” belongs to the full version and is ignored.")
@@ -472,7 +473,7 @@ class QCSystem:
         if path is None:
             raise ValueError("Model not found.")
         with self.lock:
-            if self._update_running:
+            if self.improve.running:
                 raise ValueError("A model update is running – try again in a moment.")
             if self.model is not None and self.model.slug == slug:
                 if self.mode == "inspecting":
@@ -507,138 +508,16 @@ class QCSystem:
         company's tolerance → it is accepted and learned with the next model update."""
         with self.lock:
             outcome = self.results.feedback(rid, verdict)
-            learning = self._learn_from_feedback(self.results.entry(rid), outcome)
+            entry = self.results.entry(rid)
+            learning = self.improve.on_feedback(self.model, entry, self.results.frames.get(entry["image_id"]), outcome)
         text = "accepted as good (within tolerance)" if "waiting" in learning and outcome == "false_alarm" else None
         self.log(
             "warn" if outcome in ("false_alarm", "missed") else "info",
             f"Supervisor feedback for #{rid}: {text or OUTCOME_TEXT[outcome]}",
         )
         if learning.pop("start_update", False):
-            self._start_update(None, manual=False)
+            self.improve.start(None, manual=False)
         return {"outcome": outcome, **learning}
-
-    def _learn_from_feedback(self, entry: dict, outcome: str) -> dict:
-        """Accepted parts wait for the next update; confirmed defective parts become test parts
-        for its release check. Called under the lock."""
-        lc, model = self.cfg.learning, self.model
-        if not lc.enabled or model is None or model.path is None or model.name != entry["model"]:
-            return {}
-        store = LearningStore(model.path)
-        for kind in (PENDING, KNOWN_BAD):  # the supervisor changed their mind – drop the earlier decision
-            stem = entry.pop(f"{kind}_stem", None)
-            if stem:
-                store.remove(kind, [stem])
-        frame = self.results.frames.get(entry["image_id"])
-        if frame is None:
-            return {}
-        info = {
-            "image_id": entry["image_id"],
-            "inspected_at": entry["timestamp"],
-            "result": entry["status"],
-            "defects": sorted({d["label"] for d in entry["defects"]}),
-            "model_version": entry["model_version"],
-        }
-        if outcome == "false_alarm":
-            entry[f"{PENDING}_stem"] = store.add(PENDING, frame, info, lc.max_waiting)
-        elif outcome in ("missed", "confirmed_nok"):
-            entry[f"{KNOWN_BAD}_stem"] = store.add(KNOWN_BAD, frame, info, lc.max_known_bad)
-        waiting = store.count(PENDING)
-        start = outcome == "false_alarm" and 0 < lc.update_after <= waiting and not self._update_running
-        return {"waiting": waiting, "update_after": lc.update_after, "start_update": start}
-
-    # ------------------------------------------------------------------ continuous improvement
-    def update_model_now(self, slug: str) -> None:
-        """Button in the setup area: learn the waiting accepted parts now."""
-        path = model_path(self.cfg.storage.models_dir, slug)
-        if path is None:
-            raise ValueError("Model not found.")
-        if LearningStore(path).count(PENDING) == 0:
-            raise ValueError("No accepted parts are waiting for this model.")
-        self._start_update(slug, manual=True)
-
-    def _start_update(self, slug: str | None, manual: bool) -> None:
-        with self.lock:
-            if self._update_running:
-                if manual:
-                    raise ValueError("A model update is already running.")
-                return
-            model = self.model
-            if slug is not None and (model is None or model.slug != slug):
-                path = model_path(self.cfg.storage.models_dir, slug)
-                model = QCModel.load(path) if path is not None else None
-            if model is None or model.path is None:
-                raise ValueError("Model not found.")
-            self._update_running = True
-        threading.Thread(target=self._run_update, args=(model,), name="qc-model-update", daemon=True).start()
-
-    def _run_update(self, model: QCModel) -> None:
-        """Trains and checks a new version in the background – inspection keeps running."""
-        assert model.path is not None
-        store = LearningStore(model.path)
-        try:
-            new, report = update_model(model, store)
-            if new is not None:
-                with self.lock:
-                    active = self.model is not None and self.model.slug == model.slug
-                    if active and self.model is not None:  # sensitivity may have been changed meanwhile
-                        new.sensitivity = dict(self.model.sensitivity)
-                    release(new, store, report)
-                    if active:
-                        self._set_model(new)
-                self.log(
-                    "ok",
-                    f"Model “{model.name}” updated to version {new.version}: {report.accepted_parts} "
-                    f"accepted part(s) learned, {report.known_bad_still_detected}/{report.known_bad_checked} "
-                    "known defective parts still detected.",
-                )
-                if report.still_nok:
-                    self.log(
-                        "warn",
-                        f"{len(report.still_nok)} accepted part(s) would still be rated NOK "
-                        f"({'; '.join(report.still_nok[:3])}). Missing, extra and blind holes are always "
-                        "defects; for other deviations lower the sensitivity of that method in the setup area "
-                        "if such parts are acceptable.",
-                    )
-            else:
-                self.log(
-                    "error",
-                    f"Model update of “{model.name}” rejected – the model is unchanged. " + " ".join(report.reasons),
-                )
-            self.last_update = report.to_dict()
-        except Exception as e:  # a failed update must never stop the inspection
-            logging.getLogger("qc").exception("Model update failed")
-            self.log("error", f"Model update failed: {e}")
-        finally:
-            with self.lock:
-                self._update_running = False
-
-    def undo_update(self, slug: str) -> None:
-        """Back to the version before the last update (can itself be undone the same way)."""
-        path = model_path(self.cfg.storage.models_dir, slug)
-        if path is None:
-            raise ValueError("Model not found.")
-        with self.lock:
-            if self._update_running:
-                raise ValueError("A model update is running – try again in a moment.")
-            restored = restore_previous(path)
-            if self.model is not None and self.model.slug == slug:
-                restored.sensitivity = dict(self.model.sensitivity)
-                self._set_model(restored)
-        self.log("ok", f"Model “{restored.name}” restored to version {restored.version}.")
-
-    def waiting_parts(self, slug: str) -> list[dict]:
-        path = model_path(self.cfg.storage.models_dir, slug)
-        if path is None:
-            raise ValueError("Model not found.")
-        return [{"name": stem, **info} for stem, _, info in LearningStore(path).items(PENDING)]
-
-    def discard_waiting(self, slug: str, name: str) -> None:
-        """A part was accepted by mistake – it is not learned."""
-        path = model_path(self.cfg.storage.models_dir, slug)
-        if path is None or LearningStore(path).image_path(PENDING, name) is None:
-            raise ValueError("Accepted part not found.")
-        LearningStore(path).remove(PENDING, [name])
-        self.log("info", f"Accepted part {name} of “{slug}” discarded – it will not be learned.")
 
     def archive_results(self, label: str = "") -> dict:
         """Batch finished: pack all results into a ZIP, empty the results folder, reset counters."""
@@ -701,7 +580,7 @@ class QCSystem:
                         "once (setup technician). Detection is less precise until then.",
                     }
                 )
-        out += self._improvement_notices()
+        out += self.improve.notices(self.model)
         if self.results.skipped:
             out.append(
                 {
@@ -711,32 +590,6 @@ class QCSystem:
                 }
             )
         return out
-
-    def _improvement_notices(self) -> list[dict]:
-        if self.model is None or self.model.path is None or not self.cfg.learning.enabled:
-            return []
-        if self._update_running:
-            return [
-                {
-                    "level": "info",
-                    "text": "The model is being updated with the accepted parts – inspection "
-                    "continues with the current version.",
-                }
-            ]
-        last = self.last_update
-        if last and not last["released"] and last["model"] == self.model.name:
-            return [
-                {
-                    "level": "warn",
-                    "text": "The last model update was rejected (it contradicted parts confirmed "
-                    "as defective). The model is unchanged – inform the setup technician.",
-                }
-            ]
-        waiting, after = LearningStore(self.model.path).count(PENDING), self.cfg.learning.update_after
-        if waiting:
-            when = f"after {after}" if after else "by the setup technician"
-            return [{"level": "info", "text": f"{waiting} accepted part(s) waiting – the model learns them {when}."}]
-        return []
 
     def status(self) -> dict:
         m, fa, r = self.model, self.cam.focus, self.results
@@ -769,12 +622,7 @@ class QCSystem:
             "feedback": r.feedback_counts,
             "last_result": r.last_result,
             "messages": list(self.messages)[:12],
-            "improvement": {
-                "enabled": self.cfg.learning.enabled,
-                "update_after": self.cfg.learning.update_after,
-                "running": self._update_running,
-                "last": self.last_update,
-            },
+            "improvement": self.improve.state(),
             "settings": {
                 "shots_per_part": self.shots_per_part,
                 "rotation_search": self.cfg.localization.rotation_search,

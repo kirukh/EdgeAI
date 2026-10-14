@@ -233,3 +233,51 @@ def test_archive_results(tmp_path):
     tok = client.post("/api/setup/unlock", json={"pin": cfg.ui.setup_pin}).json["token"]
     assert client.delete(f"/api/archives/{r['file']}", headers={"X-Setup-Token": tok}).json["ok"]
     assert client.get("/api/archives").json["archives"] == []
+
+
+def test_every_representation_gives_a_float_image_on_the_canvas():
+    from qc import representations as R
+
+    rng = np.random.default_rng(12)
+    a = _align(frames("A", "front", 1, rng, "stain")[0], LocalizationConfig())
+    assert set(R.labels()) == set(R.REPRESENTATIONS)
+    for name in R.REPRESENTATIONS:
+        img = R.compute(a, name)
+        assert img.dtype == np.float32 and img.shape == a.gray.shape, name
+        assert np.isfinite(img).all() and img.min() >= 0.0 and img.max() <= 1.5, name
+    assert R.compute(a, "binary").max() == 1.0  # part above the threshold
+    with pytest.raises(ValueError, match="Unknown representation"):
+        R.compute(a, "nope")
+
+
+def test_evaluation_with_own_photos(tmp_path):
+    """``qc evaluate --train … --test …``: folders ok/ and nok/<defect>/, results as table and CSV."""
+    import cv2
+
+    from qc import evaluate as E
+
+    rng = np.random.default_rng(13)
+    (tmp_path / "train").mkdir()
+    for i, f in enumerate(frames("A", "front", 6, rng)):
+        cv2.imwrite(str(tmp_path / "train" / f"{i}.png"), f)
+    sets = {"ok": frames("A", "front", 2, rng), "nok/missing": frames("A", "front", 2, rng, "missing")}
+    sets["nok"] = frames("A", "front", 1, rng, "extra")  # without a defect subfolder → "nok"
+    sets["other"] = frames("A", "front", 1, rng)  # neither ok/ nor nok/ → ignored
+    for folder, imgs in sets.items():
+        (tmp_path / "test" / folder).mkdir(parents=True, exist_ok=True)
+        for i, f in enumerate(imgs):
+            cv2.imwrite(str(tmp_path / "test" / folder / f"{i}.png"), f)
+    train = E.load_folder(tmp_path / "train")
+    test = E.load_labeled_folder(tmp_path / "test")
+    assert len(train) == 6 and sorted(lbl for _, lbl in test) == ["missing", "missing", "nok", "ok", "ok"]
+    grid = [("geometry", MethodConfig(methods=["geometry"]))]
+    lines: list[str] = []
+    rows = E.evaluate(train, test, grid, progress=lines.append)
+    assert rows[0].fpr == 0.0 and rows[0].per_defect["missing"] == 1.0 and len(lines) == 1
+    rows += E.evaluate(train[:2], test, grid, progress=None)  # too few good parts → no model
+    assert rows[1].note and rows[1].recall != rows[1].recall  # NaN, the reason is noted
+    csv_path = tmp_path / "eval.csv"
+    E.to_csv(rows, csv_path, {"run": "1"})
+    E.to_csv(rows[:1], csv_path, {"run": "2"})  # appended, header only once
+    content = csv_path.read_text(encoding="utf-8").splitlines()
+    assert content[0].startswith("run,config,fpr,recall") and len(content) == 4

@@ -104,9 +104,9 @@ class ResultStore:
         day = self.day_dir()
         stem = f"{datetime.now().strftime('%H%M%S_%f')[:-3]}_{res.status}"
         save = (res.status == "NOK" and self.cfg.save_nok_images) or (res.status == "OK" and self.cfg.save_ok_images)
-        save = save and res.overlay is not None
-        if save:
-            cv2.imwrite(str(day / f"{stem}_marked.jpg"), res.overlay)
+        overlay = res.overlay if save else None
+        if overlay is not None:
+            cv2.imwrite(str(day / f"{stem}_marked.jpg"), overlay)
             if frame is not None:
                 cv2.imwrite(str(day / f"{stem}_original.png"), frame)
         _append_csv(
@@ -118,7 +118,7 @@ class ResultStore:
                 res.status,
                 " | ".join(f"{x.label}: {x.detail}" for x in res.defects),
                 f"{res.time_ms:.0f}",
-                stem if save else "",
+                stem if overlay is not None else "",
                 res.ground_truth or "",
                 res.image_id,
                 "/".join(res.shots),

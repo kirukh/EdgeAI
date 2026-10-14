@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Any
 
 import cv2
 import numpy as np
@@ -83,7 +84,7 @@ def detect_part(gray: np.ndarray, cfg: LocalizationConfig) -> PartDetection | No
         polarity = "dark" if np.median(border) > t else "bright"
 
     foreground = blur > t if polarity == "bright" else blur <= t
-    binary = foreground.astype(np.uint8) * 255
+    binary: np.ndarray = foreground.astype(np.uint8) * 255
 
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, k)
@@ -333,6 +334,7 @@ def find_rotation(
     candidates = []
     for mirror in (False, True) if allow_mirror else (False,):
         scores = bank @ unit(cv2.flip(img, 1) if mirror else img)  # score per angle 0…359
+        idx: np.ndarray | list[int]
         if mode == "full":
             ext = np.concatenate([scores[-w:], scores, scores[:w]])
             win = np.lib.stride_tricks.sliding_window_view(ext, 2 * w + 1).max(axis=1)
@@ -444,7 +446,9 @@ def _ecc_refine(frame, gray, det, norm, to_canvas, canvas, ref, part_level, bg_l
     img = shape(norm)
     warp = np.eye(2, 3, dtype=np.float32)
     try:
-        _, warp = cv2.findTransformECC(
+        # Any: the OpenCV 5 type stubs allow no mask (None) only without gaussFiltSize
+        ecc: Any = cv2.findTransformECC
+        _, warp = ecc(
             tmpl_half,
             half(img),
             warp,
