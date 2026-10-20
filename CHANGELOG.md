@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.1.4 – part detection next to rails, UI theme (2026-10-20)
+
+- **Part detection ignores structures at the image border.** Bright guide rails along the belt (or any bright or dark
+  structure that runs out of the image) made the automatic polarity take the dark belt for the part: it touched the
+  image border, was never "complete", the trigger never fired (teach-in only with "Capture now") and a model taught
+  that way rated every part NOK. Now the polarity is the one in which a large object lies completely inside the
+  image, and the part is the largest such object; the old border rule remains the fallback for parts entering or
+  leaving the image. Such an object must also differ from its surroundings by at least
+  `localization.min_part_contrast` grey levels (default 25), so belt texture or noise on an empty belt never counts
+  as a part. Tested with a conveyor video (rails top and bottom): before 0 of 20 teach-in parts and 0 of 100
+  test parts captured, now 20/20 and 100/100 (also with `trigger.detect_width` 240 as on the Pi). New test
+  `test_rails_at_the_image_border_are_not_the_part`. The synthetic evaluation is unchanged (identical table).
+- **UI theme "measuring table"**: graphite machine bar with a safety-yellow edge, faint measuring grid, viewfinder
+  corners around the camera image, monospace for labels and numbers. OK/NOK as solid colour blocks with white text
+  (readable from a distance); NOK is also striped, so it differs from OK not only by colour. Light and dark scheme,
+  system fonts only (offline, CSP unchanged). Screenshots in `docs/` updated.
+
 ## 2.1.3 – CI, faster tests, code clean-up (2026-10-14)
 
 No change to the inspection: the synthetic evaluation (`qc evaluate --synthetic`, 4 scenarios × 15 configurations)

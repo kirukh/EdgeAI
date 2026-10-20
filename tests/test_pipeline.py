@@ -281,3 +281,18 @@ def test_evaluation_with_own_photos(tmp_path):
     E.to_csv(rows[:1], csv_path, {"run": "2"})  # appended, header only once
     content = csv_path.read_text(encoding="utf-8").splitlines()
     assert content[0].startswith("run,config,fpr,recall") and len(content) == 4
+
+
+def test_rails_at_the_image_border_are_not_the_part():
+    """Bright guide rails along the belt (top/bottom border): the part is still found and complete –
+    the border rule alone took the dark belt for the part and the trigger never fired."""
+    rng = np.random.default_rng(14)
+    for frame in frames("A", "front", 3, rng):
+        frame[:40], frame[-40:] = 150, 150  # rails, as bright as the metal part
+        det = detect_part(to_gray(frame), LocalizationConfig())
+        assert det is not None and det.polarity == "bright" and det.complete
+        assert 0.05 < det.area_ratio < 0.3  # the plate, not a rail or the belt
+    empty = S.compose(None, (0, 0, 0), "front", rng=rng)  # empty belt: noise patches are no part
+    empty[:40], empty[-40:] = 150, 150
+    det = detect_part(to_gray(empty), LocalizationConfig())
+    assert det is None or not det.complete

@@ -4,7 +4,9 @@ Steps per image:
 1. Grayscale + Otsu threshold → separate the part from the conveyor
    (automatic polarity: front light = bright part on a dark belt,
    backlight = dark part in front of a bright background).
-2. Largest outer contour = part; ``minAreaRect`` gives position and angle.
+2. Largest outer contour that lies completely inside the image = part – rails, belt edges
+   and other structures that run out of the image are ignored; ``minAreaRect`` gives
+   position and angle.
 3. Coarse affine transform: long side of the bounding rectangle horizontal,
    part centroid in the centre of a fixed canvas.
 4. Rotation search: the part is compared with the reference at all angles
@@ -71,35 +73,81 @@ def resize_to_width(img: np.ndarray, width: int) -> np.ndarray:
     return cv2.resize(img, (width, int(round(h * scale))), interpolation=interp)
 
 
+def _foreground(blur: np.ndarray, t: float, polarity: str) -> tuple[np.ndarray, list[np.ndarray]]:
+    """Binary image of the part's polarity and its outer contours."""
+    binary: np.ndarray = ((blur > t) if polarity == "bright" else (blur <= t)).astype(np.uint8) * 255
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    return binary, list(contours)
+
+
+def _inside(contour: np.ndarray, shape: tuple[int, ...], m: int) -> bool:
+    x, y, bw, bh = cv2.boundingRect(contour)
+    return x > m and y > m and x + bw < shape[1] - m and y + bh < shape[0] - m
+
+
+def _contrast(blur: np.ndarray, contour: np.ndarray) -> float:
+    """Brightness difference between an object and a ring around it."""
+    x, y, w, h = cv2.boundingRect(contour)
+    p = 8  # ring width
+    x0, y0 = max(0, x - p), max(0, y - p)
+    roi = blur[y0 : y + h + p, x0 : x + w + p]
+    inner = np.zeros(roi.shape, np.uint8)
+    cv2.drawContours(inner, [contour - (x0, y0)], -1, 255, cv2.FILLED)
+    ring = cv2.subtract(cv2.dilate(inner, np.ones((2 * p + 1, 2 * p + 1), np.uint8)), inner)
+    if not ring.any():
+        return 0.0
+    return abs(float(roi[inner > 0].mean()) - float(roi[ring > 0].mean()))
+
+
+def _parts_inside(
+    blur: np.ndarray, contours: list[np.ndarray], m: int, min_area: float, min_contrast: float
+) -> list[np.ndarray]:
+    """Objects that can be a part: completely inside the image, large enough, clearly set off."""
+    return [
+        c
+        for c in contours
+        if cv2.contourArea(c) >= min_area and _inside(c, blur.shape, m) and _contrast(blur, c) >= min_contrast
+    ]
+
+
 def detect_part(gray: np.ndarray, cfg: LocalizationConfig) -> PartDetection | None:
-    """Finds the largest part in the image (or ``None``)."""
+    """Finds the part: the largest object that lies completely inside the image, otherwise the
+    largest object (part entering or leaving the image → ``complete`` is False). Or ``None``."""
     blur = cv2.GaussianBlur(gray, (5, 5), 0)
     t, _ = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    m, min_area = cfg.border_margin_px, cfg.min_part_area_ratio * gray.shape[0] * gray.shape[1]
 
-    polarity = cfg.polarity
-    if polarity == "auto":
-        h, w = gray.shape
-        b = max(2, int(0.04 * min(h, w)))
-        border = np.concatenate([blur[:b].ravel(), blur[-b:].ravel(), blur[:, :b].ravel(), blur[:, -b:].ravel()])
-        polarity = "dark" if np.median(border) > t else "bright"
-
-    foreground = blur > t if polarity == "bright" else blur <= t
-    binary: np.ndarray = foreground.astype(np.uint8) * 255
-
-    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, k)
-    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if cfg.polarity == "auto":
+        # The polarity in which a large object lies completely inside the image is the part's.
+        # Bright rails or a dark belt that run out of the image do not count (they made the
+        # border rule below take the belt for the part). Otherwise – part entering or leaving –
+        # the background is what touches the image border.
+        candidates = {p: _foreground(blur, t, p) for p in ("bright", "dark")}
+        found = {p: _parts_inside(blur, c[1], m, min_area, cfg.min_part_contrast) for p, c in candidates.items()}
+        size = {p: max((cv2.contourArea(c) for c in found[p]), default=0.0) for p in found}
+        polarity = max(size, key=lambda p: size[p])
+        if not found[polarity]:
+            h, w = gray.shape
+            b = max(2, int(0.04 * min(h, w)))
+            border = np.concatenate([blur[:b].ravel(), blur[-b:].ravel(), blur[:, :b].ravel(), blur[:, -b:].ravel()])
+            polarity = "dark" if np.median(border) > t else "bright"
+        binary, contours = candidates[polarity]
+        parts = found[polarity]
+    else:
+        polarity = cfg.polarity
+        binary, contours = _foreground(blur, t, polarity)
+        parts = _parts_inside(blur, contours, m, min_area, cfg.min_part_contrast)
     if not contours:
         return None
-    contour = max(contours, key=cv2.contourArea)
+    contour = max(parts or contours, key=cv2.contourArea)
     area = cv2.contourArea(contour)
     area_ratio = area / float(gray.shape[0] * gray.shape[1])
     if area_ratio < cfg.min_part_area_ratio:
         return None
 
     x, y, bw, bh = cv2.boundingRect(contour)
-    m = cfg.border_margin_px
-    complete = x > m and y > m and x + bw < gray.shape[1] - m and y + bh < gray.shape[0] - m
+    complete = _inside(contour, gray.shape, m)
 
     filled = np.zeros_like(gray)
     cv2.drawContours(filled, [contour], -1, 255, thickness=cv2.FILLED)

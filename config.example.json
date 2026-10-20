@@ -26,6 +26,7 @@
   "localization": {
     "polarity": "auto",
     "min_part_area_ratio": 0.02,
+    "min_part_contrast": 25.0,
     "border_margin_px": 4,
     "canvas_margin_ratio": 0.12,
     "use_ecc_refine": true,

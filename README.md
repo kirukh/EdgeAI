@@ -49,7 +49,8 @@ The simulator generates a conveyor with synthetic plates. On the operator screen
 ```
 Camera image
   → Trigger: part completely visible and in the image centre?          (trigger.py)
-  → Localisation: Otsu threshold, largest contour, minAreaRect         (alignment.py)
+  → Localisation: Otsu threshold, largest object completely in the image (rails and belt edges that run out
+    of the image are ignored), minAreaRect                              (alignment.py)
   → Alignment: centroid onto a fixed canvas, 360° rotation search against
     the reference (decided by the hole pattern), ECC fine alignment (sub-pixel)
   → Photometric normalisation: background = 0, part = 1

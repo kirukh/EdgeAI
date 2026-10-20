@@ -55,6 +55,9 @@ class LocalizationConfig:
     # "auto" detects whether the part is brighter or darker than the background
     polarity: str = "auto"  # "auto" | "bright" | "dark"
     min_part_area_ratio: float = 0.02  # minimum part area relative to the image
+    # An object inside the image counts as a part only if it differs this much (grey levels) from its
+    # surroundings – patches of belt texture or noise on an empty belt do not
+    min_part_contrast: float = 25.0
     border_margin_px: int = 4  # part must not touch the image border
     canvas_margin_ratio: float = 0.12  # margin around the aligned part
     use_ecc_refine: bool = True  # sub-pixel fine alignment via ECC
