@@ -214,6 +214,25 @@ def test_focus_assistant_measures_sharpness(make_system):
     assert s.status()["focus_assist"] is None
 
 
+def test_focus_assistant_ends_with_the_setup_area(make_system):
+    """Leaving the setup area (lock) or its timeout switches the focus assistant off – the operator
+    screen has no button for it, so its overlay must not stay in the live image."""
+    s = make_system()
+    c = web_client(s)
+    tok = c.post("/api/setup/unlock", json={"pin": s.cfg.ui.setup_pin}).json["token"]
+    h = {"X-Setup-Token": tok}
+    assert c.post("/api/focus", json={"on": True}, headers=h).json["ok"]
+    assert c.get("/api/status").json["focus_assist"] is not None  # setup open → stays on
+    c.post("/api/setup/lock", headers=h)
+    assert s.cam.focus is None and c.get("/api/status").json["focus_assist"] is None
+    tok = c.post("/api/setup/unlock", json={"pin": s.cfg.ui.setup_pin}).json["token"]
+    assert c.post("/api/focus", json={"on": True}, headers={"X-Setup-Token": tok}).json["ok"]
+    s.cfg.ui.setup_timeout_min = 0  # the setup session times out
+    time.sleep(0.01)
+    assert c.get("/api/status").json["focus_assist"] is None
+    assert sum("Focus assistant off" in m["text"] for m in s.messages) == 2  # logged once per switch-off
+
+
 # ------------------------------------------------------------ automatic camera setup
 def test_autosetup_building_blocks():
     from qc import autosetup as AS

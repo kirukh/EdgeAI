@@ -325,6 +325,8 @@ class CameraSetup:
     def set_focus_assist(self, on: bool) -> None:
         """Live sharpness value in the camera image – for lenses that are focused by hand
         (Camera Module v2/IMX219, HQ camera, Global Shutter camera)."""
+        if not on and self.focus is None:
+            return
         self.focus = {"until": time.time() + FOCUS_MINUTES * 60, "best": 0.0, "value": 0.0} if on else None
         self.log(
             "info",

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.1.5 – focus assistant ends with the setup area (2026-10-21)
+
+- The focus assistant kept running for up to 10 minutes after the setup area was left ("← Operator view · lock")
+  or its PIN session timed out. The operator screen has no button to switch it off, so its box stayed in the live
+  image instead of the normal trigger lines. It now switches off as soon as no device has the setup area open
+  (locked or timed out). Test `test_focus_assistant_ends_with_the_setup_area` (fails on 2.1.4).
+
 ## 2.1.4 – part detection next to rails, UI theme (2026-10-20)
 
 - **Part detection ignores structures at the image border.** Bright guide rails along the belt (or any bright or dark

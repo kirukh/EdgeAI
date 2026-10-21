@@ -55,8 +55,16 @@ def snapshot():
     return Response(system().preview_jpeg, mimetype="image/jpeg")
 
 
+def _end_focus_without_setup() -> None:
+    """The focus assistant belongs to the setup area: it ends when no device has it open any more
+    (locked or timed out) – the operator screen cannot switch it off."""
+    if system().cam.focus is not None and not auth().any_unlocked():
+        system().set_focus_assist(False)
+
+
 @bp.get("/api/status")
 def status():
+    _end_focus_without_setup()
     return jsonify(system().status())
 
 
@@ -87,6 +95,7 @@ def setup_unlock():
 @bp.post("/api/setup/lock")
 def setup_lock():
     auth().lock(request.headers.get("X-Setup-Token", ""))
+    _end_focus_without_setup()
     return ok()
 
 

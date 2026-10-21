@@ -59,15 +59,26 @@ class SetupAuth:
             return "Invalid network token."
         return None
 
+    def _expire(self, now: float) -> None:
+        timeout = self.ui.setup_timeout_min * 60
+        for k in [k for k, t in self._sessions.items() if now - t > timeout]:
+            del self._sessions[k]
+
+    def any_unlocked(self) -> bool:
+        """Is the setup area open on any device (sessions that timed out are closed here)?"""
+        if not self.pin_required:
+            return True
+        with self._guard:
+            self._expire(time.time())
+            return bool(self._sessions)
+
     def unlocked(self, request: Request) -> bool:
         if not self.pin_required:
             return True
         sent = request.headers.get("X-Setup-Token", "")
         now = time.time()
         with self._guard:
-            timeout = self.ui.setup_timeout_min * 60
-            for k in [k for k, t in self._sessions.items() if now - t > timeout]:
-                del self._sessions[k]
+            self._expire(now)
             if sent and sent in self._sessions:
                 self._sessions[sent] = now
                 return True
