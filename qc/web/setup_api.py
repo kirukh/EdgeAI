@@ -73,6 +73,12 @@ def model_delete(slug: str):
     return ok()
 
 
+@bp.post("/belt-axis")
+def belt_axis():
+    system().set_belt_axis(str(body().get("axis", "")))
+    return ok()
+
+
 @bp.post("/focus")
 def focus():
     system().set_focus_assist(bool(body().get("on")))

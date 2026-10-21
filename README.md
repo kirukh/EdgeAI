@@ -215,6 +215,9 @@ and lets the parts run.
 | 3 · The other good parts run | Teach-in as usual; the sharpness of every reference is measured. |
 | Afterwards | All settings are stored **with the model** and applied whenever this part type is selected. |
 
+**Camera turned by 90°** (belt runs top ↕ bottom in the image): setup area → *Setup* → *Camera & focus* →
+*Belt direction* – the trigger lines turn with it; saved in `config.json` (`"trigger": {"axis": "y"}`).
+
 Stays manual: the lens of a camera **without** focus motor (Camera Module v2, HQ) – focus it once with the **focus
 assistant** (setup area → *Setup* → *Camera & focus*); camera mount and lighting. Settings: `config.json →
 "autosetup"`.

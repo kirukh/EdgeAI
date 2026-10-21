@@ -327,6 +327,31 @@ class QCSystem:
     def set_focus_assist(self, on: bool) -> None:
         self.cam.set_focus_assist(on)
 
+    def set_belt_axis(self, axis: str) -> None:
+        """Belt direction in the image – how the camera is mounted: "x" = left ↔ right (trigger bars
+        vertical), "y" = top ↕ bottom (camera turned by 90°, bars horizontal). Saved in config.json."""
+        if axis not in ("x", "y"):
+            raise ValueError("Belt direction must be x (left ↔ right) or y (top ↕ bottom).")
+        with self.lock:
+            if self.mode != "idle":
+                raise ValueError("Stop the current mode first.")
+            self.cam.base_axis = axis
+            model = self.model
+            prof = model.camera_profile if model is not None else None
+            if model is not None and prof and prof.get("axis") not in (None, axis):
+                model.camera_profile = {**prof, "axis": axis}
+                model.save_meta()
+            self.cam.apply(model.camera_profile if model else None, force=True)
+        text = "left ↔ right (bars vertical)" if axis == "x" else "top ↕ bottom (bars horizontal)"
+        try:
+            saved = self.cfg.persist("trigger", "axis", axis)
+        except OSError as e:
+            saved = False
+            self.log("warn", f"Belt direction could not be saved in the configuration: {e}")
+        self.log("ok", f"Belt direction in the image: {text}" + (" – saved." if saved else "."))
+        if model is not None:
+            self.log("warn", f"If the camera was turned: teach “{model.name}” in again (references, zoom).")
+
     # ------------------------------------------------------------------ teach-in
     def start_learning(self, name: str, auto_finish: bool = False) -> None:
         """``auto_finish``: create the model automatically once the target number of parts is reached."""

@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.1.6 – belt direction for a turned camera (2026-10-21)
+
+- Setup area → *Camera & focus* → **Belt direction in the camera image**: left ↔ right (trigger lines vertical) or
+  top ↕ bottom (camera turned by 90°, trigger lines horizontal). Takes effect immediately, is saved in the config file
+  the app was started with (`"trigger": {"axis": …}`, all other settings kept) and taken over by the active model's
+  camera profile. Only while idle; needs the setup PIN. The trigger itself already supported both directions
+  (`trigger.axis`), only the switch was missing. Test `test_belt_direction_can_be_switched_for_a_turned_camera`.
+- `AppConfig.persist()` writes one setting back into the config file; `QCModel.save_meta()`.
+
 ## 2.1.5 – focus assistant ends with the setup area (2026-10-21)
 
 - The focus assistant kept running for up to 10 minutes after the setup area was left ("← Operator view · lock")

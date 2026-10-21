@@ -7,6 +7,7 @@ All parameters live in dataclasses and can be overridden via a JSON file
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any
@@ -217,17 +218,33 @@ class AppConfig:
     target_reference_count: int = 15
     # Sections of older versions that were found in the file and ignored (logged at start-up)
     ignored: list[str] = field(default_factory=list, repr=False)
+    # File the configuration was loaded from – settings changed in the UI are written back there
+    path: str = field(default="", repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d.pop("ignored")
+        d.pop("path")
         return d
+
+    def persist(self, section: str, key: str, value: Any) -> bool:
+        """Writes one setting into the config file (all other entries are kept). False without a file."""
+        if not self.path:
+            return False
+        p = Path(self.path)
+        data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+        data.setdefault(section, {})[key] = value
+        tmp = p.with_name(p.name + ".tmp")
+        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        os.replace(tmp, p)
+        return True
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AppConfig:
         data = dict(data)
         ignored = sorted(k for k in REMOVED_SECTIONS if data.pop(k, None) is not None)
         data.pop("ignored", None)
+        data.pop("path", None)
         cfg = _merge(cls(), data)
         cfg.ignored = ignored
         cfg.validate()
@@ -236,12 +253,15 @@ class AppConfig:
     @classmethod
     def load(cls, path: str | Path | None) -> AppConfig:
         if path is None or not Path(path).exists():
-            return cls()
-        try:
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
-        except json.JSONDecodeError as e:
-            raise ConfigError(f"{path}: not valid JSON (line {e.lineno}, column {e.colno}): {e.msg}") from None
-        return cls.from_dict(data)
+            cfg = cls()
+        else:
+            try:
+                data = json.loads(Path(path).read_text(encoding="utf-8"))
+            except json.JSONDecodeError as e:
+                raise ConfigError(f"{path}: not valid JSON (line {e.lineno}, column {e.colno}): {e.msg}") from None
+            cfg = cls.from_dict(data)
+        cfg.path = str(path) if path is not None else ""
+        return cfg
 
     def validate(self) -> None:
         """Clear error messages for typical mistakes instead of strange behaviour later."""

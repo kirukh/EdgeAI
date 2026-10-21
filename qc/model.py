@@ -418,6 +418,10 @@ class QCModel:
         for k, v in values.items():
             if k in METHOD_NAMES:
                 self.sensitivity[k] = float(min(3.0, max(0.25, float(v))))
+        self.save_meta()
+
+    def save_meta(self) -> None:
+        """Writes the settings (sensitivity, camera profile …) of a saved model."""
         if self.path is None:
             return
         if self._legacy:

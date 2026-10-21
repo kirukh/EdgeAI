@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 from conftest import shots, web_client
 
+from qc import synthetic as S
 from qc.config import LocalizationConfig, MethodConfig
 from qc.model import QCModel
 
@@ -120,3 +121,40 @@ def test_operator_screen_endpoints(make_system):
     assert c.post("/api/inspect/stop").json["ok"]
     assert c.post("/api/camera-setup/cancel").json["ok"] and s.mode == "idle"
     assert c.get("/api/archives/nope.zip").status_code == 404
+
+
+def test_belt_direction_can_be_switched_for_a_turned_camera(make_system, tmp_path):
+    """Camera turned by 90°: the belt runs top ↕ bottom, the trigger lines are horizontal. The setting
+    needs the PIN and an idle system, is saved in config.json and taken over by the active model."""
+    import json
+
+    from qc.config import AppConfig
+    from qc.trigger import PartTrigger
+
+    s = make_system()
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(json.dumps({"ui": {"setup_pin": "1234"}}), encoding="utf-8")
+    s.cfg.path = str(cfg_file)
+    rng = np.random.default_rng(7)
+    model = QCModel.train("Plate", shots("A", "front", 6, rng), LocalizationConfig(), MethodConfig())
+    model.camera_profile = {"auto": True, "axis": "x", "crop": [0.0, 0.0, 1.0, 1.0]}
+    model.save(s.cfg.storage.models_dir)
+    c = web_client(s)
+    assert c.post("/api/belt-axis", json={"axis": "y"}).status_code == 403  # setup function
+    h = _unlocked(c, s.cfg.ui.setup_pin)
+    c.post("/api/models/Plate/select")
+    c.post("/api/inspect/start", json={})
+    assert c.post("/api/belt-axis", json={"axis": "y"}, headers=h).status_code == 400  # not while inspecting
+    c.post("/api/inspect/stop")
+    assert c.post("/api/belt-axis", json={"axis": "diagonal"}, headers=h).status_code == 400
+    assert c.post("/api/belt-axis", json={"axis": "y"}, headers=h).json["ok"]
+    assert s.cfg.trigger.axis == "y" and c.get("/api/status").json["camera_state"]["axis"] == "y"
+    saved = json.loads(cfg_file.read_text(encoding="utf-8"))
+    assert saved == {"ui": {"setup_pin": "1234"}, "trigger": {"axis": "y"}}  # other settings kept
+    assert AppConfig.load(cfg_file).trigger.axis == "y"
+    assert QCModel.load(s.model.path).camera_profile["axis"] == "y"  # the model follows
+
+    trig = PartTrigger(s.cfg.trigger, s.cfg.localization)  # a part moving top → bottom fires once
+    part = S.make_part("A", None, rng)
+    fired = [y for y in range(-120, 620, 12) if trig.update(S.compose(part, (320, y, 90), "front", rng=rng))]
+    assert len(fired) == 1 and abs(fired[0] - 240) < 30
