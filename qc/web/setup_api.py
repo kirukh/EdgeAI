@@ -79,6 +79,12 @@ def belt_axis():
     return ok()
 
 
+@bp.post("/trigger-mode")
+def trigger_mode():
+    system().set_trigger_mode(str(body().get("mode", "")))
+    return ok()
+
+
 @bp.post("/focus")
 def focus():
     system().set_focus_assist(bool(body().get("on")))

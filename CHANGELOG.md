@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.1.7 – capture mode "still" for a stop-and-go belt (2026-10-21)
+
+- **`trigger.mode = "still"`**: the picture is taken only once the part has rested inside the centre band for
+  `trigger.still_frames` frames (default 3), never while it moves or brakes. Switch in the setup area (*Camera &
+  focus → Take the picture*), saved in config.json. A part that leaves the band without stopping is still captured
+  (in motion), counted, and the operator screen shows a notice. `pass` (default) is unchanged.
+- Reason: real test with a stop-and-go video filmed from a screen – in 98 of 200 good parts the first image was
+  NOK, because "pass" fires on the frame in which the part arrives (motion blur / screen ghost); the majority vote
+  corrected it. On that video "still" captures all 100 parts two frames after they come to rest.
+- Simulator: `camera.sim_stop_frames` (parts rest in the image centre). 3 new tests.
+
 ## 2.1.6 – belt direction for a turned camera (2026-10-21)
 
 - Setup area → *Camera & focus* → **Belt direction in the camera image**: left ↔ right (trigger lines vertical) or

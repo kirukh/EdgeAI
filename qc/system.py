@@ -343,14 +343,31 @@ class QCSystem:
                 model.save_meta()
             self.cam.apply(model.camera_profile if model else None, force=True)
         text = "left ↔ right (bars vertical)" if axis == "x" else "top ↕ bottom (bars horizontal)"
-        try:
-            saved = self.cfg.persist("trigger", "axis", axis)
-        except OSError as e:
-            saved = False
-            self.log("warn", f"Belt direction could not be saved in the configuration: {e}")
-        self.log("ok", f"Belt direction in the image: {text}" + (" – saved." if saved else "."))
+        self._save_trigger_setting("axis", axis, f"Belt direction in the image: {text}")
         if model is not None:
             self.log("warn", f"If the camera was turned: teach “{model.name}” in again (references, zoom).")
+
+    def set_trigger_mode(self, mode: str) -> None:
+        """When the image is taken: "pass" = as the part crosses the image centre (continuous belt),
+        "still" = once it rests in the centre band (stop-and-go belt). Saved in config.json."""
+        if mode not in ("pass", "still"):
+            raise ValueError("Capture mode must be pass (part passes through) or still (part stops in the centre).")
+        with self.lock:
+            if self.mode != "idle":
+                raise ValueError("Stop the current mode first.")
+            self.cfg.trigger.mode = mode
+            self.trigger.armed, self.trigger.prev_pos, self.trigger.moving_captures = True, None, 0
+            self.trigger.track.clear()
+        text = "while the part passes the centre" if mode == "pass" else "when the part rests in the centre"
+        self._save_trigger_setting("mode", mode, f"Capture {text}")
+
+    def _save_trigger_setting(self, key: str, value: str, text: str) -> None:
+        try:
+            saved = self.cfg.persist("trigger", key, value)
+        except OSError as e:
+            saved = False
+            self.log("warn", f"Setting could not be saved in the configuration: {e}")
+        self.log("ok", text + (" – saved." if saved else "."))
 
     # ------------------------------------------------------------------ teach-in
     def start_learning(self, name: str, auto_finish: bool = False) -> None:
@@ -553,6 +570,7 @@ class QCSystem:
                 label = self.model.name
             info = qa.create_archive(self.cfg.storage.results_dir, self.cfg.storage.archive_dir, label)
             self.results.reset()
+            self.trigger.moving_captures = 0
         s = info["summary"]
         self.log(
             "ok",
@@ -563,6 +581,7 @@ class QCSystem:
     def reset_counts(self) -> None:
         with self.lock:
             self.results.reset()
+            self.trigger.moving_captures = 0
 
     def set_sim(
         self,
@@ -605,6 +624,15 @@ class QCSystem:
                         "once (setup technician). Detection is less precise until then.",
                     }
                 )
+        if self.cfg.trigger.mode == "still" and self.trigger.moving_captures:
+            out.append(
+                {
+                    "level": "warn",
+                    "text": f"{self.trigger.moving_captures} part(s) did not stop in the image centre and were "
+                    "photographed while moving. Check where the belt stops, or switch the capture mode to "
+                    "“part passes through” (setup area).",
+                }
+            )
         out += self.improve.notices(self.model)
         if self.results.skipped:
             out.append(
@@ -624,6 +652,7 @@ class QCSystem:
             "camera_info": getattr(self.camera, "info", ""),
             "fps": round(self.fps, 1),
             "armed": self.trigger.armed,
+            "trigger_mode": self.cfg.trigger.mode,
             "continuous": self.camera.continuous,
             "model": m.summary() if m else None,
             "learning": {

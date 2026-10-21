@@ -182,6 +182,15 @@
         </label>
         <p class="hint" style="margin-top:4px">Turn the camera so the belt runs straight in the image, then choose the direction.
           Saved in config.json. A part taught in before the camera was turned has to be taught in again.</p>
+        <label class="settings">Take the picture
+          <select id="trigMode">
+            <option value="pass">while the part passes the centre (continuous belt)</option>
+            <option value="still">when the part rests in the centre (stop-and-go belt, sharpest image)</option>
+          </select>
+        </label>
+        <p class="hint" style="margin-top:4px">Rests in the centre: the picture is taken only once the part has stopped between
+          the lines. A part that does not stop is still photographed as it leaves the lines – the operator screen then
+          shows a notice.</p>
         <div class="row" style="margin-top:10px">
           <button class="primary" id="btnFocus">Focus assistant on</button>
           <span id="focusVal" class="hint"></span>

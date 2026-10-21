@@ -539,3 +539,64 @@ def test_camera_sources_from_the_config(tmp_path):
         open_camera(CameraConfig(source="ftp:camera"))
     with pytest.raises(RuntimeError, match="Could not open camera"):
         open_camera(CameraConfig(source="usb:/dev/does-not-exist"))
+
+
+# ------------------------------------------------------------ stop-and-go belt ("still" capture mode)
+def _drive(trig, xs, rng):
+    part = S.make_part("A", None, np.random.default_rng(0))
+    return [i for i, x in enumerate(xs) if trig.update(S.compose(part, (x, 240, 2), "front", rng=rng))]
+
+
+def test_still_mode_captures_only_the_resting_part():
+    from qc.config import TriggerConfig
+    from qc.trigger import PartTrigger
+
+    rng = np.random.default_rng(3)
+    brake = [320 - 60 * t**2 for t in np.linspace(1, 0, 8)]  # brakes into the centre
+    xs = [*range(-150, 260, 14), *brake, *[320] * 10, *range(334, 900, 14)]
+    rest = xs.index(320)  # first frame at rest
+    passing = _drive(PartTrigger(TriggerConfig(), LocalizationConfig()), xs, rng)
+    assert len(passing) == 1 and passing[0] <= rest  # "pass": already while braking
+    trig = PartTrigger(TriggerConfig(mode="still"), LocalizationConfig())
+    still = _drive(trig, xs, rng)
+    assert len(still) == 1 and still[0] > passing[0] and xs[still[0]] == 320 and trig.moving_captures == 0
+    jump = [*range(-150, 300, 45), *[320] * 10, *range(365, 900, 45)]  # abrupt stop (like a stop-and-go video)
+    trig = PartTrigger(TriggerConfig(mode="still"), LocalizationConfig())
+    assert _drive(trig, jump, rng) == [jump.index(320) + 2]  # after three frames at rest
+    trig = PartTrigger(TriggerConfig(mode="still"), LocalizationConfig())  # belt does not stop
+    moving = _drive(trig, list(range(-150, 900, 14)), rng)
+    assert len(moving) == 1 and trig.moving_captures == 1  # still captured, but counted
+
+
+def test_still_mode_with_a_stop_and_go_belt(make_system):
+    s = make_system(sim_defect_rate=0.0, sim_stop_frames=12)
+    s.cfg.trigger.mode = "still"
+    s.start()
+    s.start_learning("Plate", auto_finish=True)
+    s.teach.target = 4
+    wait(lambda: s.mode == "idle" and s.model is not None, 120)
+    s.start_inspection()
+    wait(lambda: len(s.results.history) >= 3, 120)
+    s.stop_inspection()
+    assert s.trigger.moving_captures == 0 and all(h["status"] == "OK" for h in s.results.history)
+    assert not any("did not stop" in n["text"] for n in s.supervisor_notices())
+    s.camera.cfg.sim_stop_frames = 0  # the belt no longer stops: parts are captured in motion and reported
+    s.start_inspection()
+    wait(lambda: s.trigger.moving_captures >= 1, 60)
+    s.stop_inspection()
+    assert any("did not stop" in n["text"] for n in s.supervisor_notices())
+    s.reset_counts()
+    assert s.trigger.moving_captures == 0
+
+
+def test_capture_mode_switch_via_setup_api(make_system, tmp_path):
+    s = make_system()
+    s.cfg.path = str(tmp_path / "config.json")
+    c = web_client(s)
+    assert c.post("/api/trigger-mode", json={"mode": "still"}).status_code == 403  # setup function
+    tok = c.post("/api/setup/unlock", json={"pin": s.cfg.ui.setup_pin}).json["token"]
+    h = {"X-Setup-Token": tok}
+    assert c.post("/api/trigger-mode", json={"mode": "sometimes"}, headers=h).status_code == 400
+    assert c.post("/api/trigger-mode", json={"mode": "still"}, headers=h).json["ok"]
+    assert c.get("/api/status").json["trigger_mode"] == "still"
+    assert AppConfig.load(tmp_path / "config.json").trigger.mode == "still"

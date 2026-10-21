@@ -343,6 +343,7 @@ class SimulatorSource(CameraSource):
         else:
             self.angle = self.rng.uniform(-6, 6) + (180 if self.rng.random() < 0.5 else 0)
         self.gap = self.rng.integers(0, 20)
+        self._stopped, self._stop_left = False, 0  # stop-and-go belt (sim_stop_frames)
 
     def _layer(self, light: str):
         key = (light, self.crop[2])
@@ -409,8 +410,12 @@ class SimulatorSource(CameraSource):
             self._af -= 1
             if not self._af:
                 self.defocus = 0.0
-        if not self.hold:
+        if self._stop_left:
+            self._stop_left -= 1  # part rests in the image centre
+        elif not self.hold:
             self.x += self.cfg.sim_speed_px
+            if self.cfg.sim_stop_frames and not self._stopped and self.x >= 320:
+                self.x, self._stopped, self._stop_left = 320.0, True, int(self.cfg.sim_stop_frames)
         if self.x > 840 + self.gap * self.cfg.sim_speed_px:
             self._spawn()
         cx, cy, f = self.crop[0] * 640.0, self.crop[1] * 480.0, self.crop[2]

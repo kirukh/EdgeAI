@@ -85,6 +85,11 @@ findings need a second method to agree. `"method": {"decision": "or"}` makes eve
 **Sensitivity per method** (setup area → Models): ×0.5 … ×2 per method and model (> 1 = stricter). It takes effect
 immediately and is stored with the model.
 
+**Capture mode** (setup area → *Setup* → *Camera & focus*, `"trigger": {"mode": …}`): `pass` takes the picture as
+the part crosses the image centre (continuous belt); `still` waits until the part rests between the two lines for
+3 frames (stop-and-go belt) – the image is never taken while the part moves or brakes. A part that does not stop is
+still photographed as it leaves the lines, and the operator screen shows a notice.
+
 **Multi-shot majority vote** (always on): 3 images while the part passes; random false alarms (dust, a reflection)
 are outvoted. If the 1st image is clearly good (every method below 50 % of its threshold) it is final, so a clearly
 good part costs one inspection and a doubtful one three. A tie counts as NOK.

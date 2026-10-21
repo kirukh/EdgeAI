@@ -49,6 +49,7 @@ class CameraConfig:
     sim_defocus: float = 0.0  # simulated lens blur (Gaussian sigma in px)
     sim_part_scale: float = 1.0  # < 1 = camera mounted higher (parts appear smaller)
     sim_autofocus: bool = False  # simulate a camera with focus motor (Camera Module 3)
+    sim_stop_frames: int = 0  # stop-and-go belt: each part rests this many frames in the image centre
 
 
 @dataclass
@@ -81,6 +82,11 @@ class TriggerConfig:
     center_band_ratio: float = 0.12
     # Conveyor direction: "x" (left↔right) or "y" (top↔bottom)
     axis: str = "x"
+    # "pass": capture when the part crosses the image centre (also while it moves);
+    # "still": stop-and-go belt – capture only once the part rests in the centre band (sharp image).
+    # A part that does not stop is still captured when it leaves the band (and counted).
+    mode: str = "pass"
+    still_frames: int = 3  # "still": frames without movement before the capture
     detect_width: int = 320  # resolution for the fast part detection
     rearm_frames: int = 3  # frames without a centred part before re-arming
 
@@ -291,6 +297,8 @@ class AppConfig:
         one_of("localization.rotation_search", self.localization.rotation_search, ("full", "flip", "off"))
         one_of("localization.ecc_datum", self.localization.ecc_datum, ("auto", "outline", "all"))
         one_of("trigger.axis", self.trigger.axis, ("x", "y"))
+        one_of("trigger.mode", self.trigger.mode, ("pass", "still"))
+        at_least("trigger.still_frames", self.trigger.still_frames, 2)
         for m in self.method.methods:
             one_of("method.methods[]", m, tuple(METHODS))
         one_of("method.diff_representation", self.method.diff_representation, tuple(REPRESENTATIONS))
