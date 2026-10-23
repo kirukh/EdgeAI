@@ -1,185 +1,30 @@
-"""Inspection methods.
-
-Three methods that can be used individually or combined:
-
-``geometry`` – classical image processing
-    Holes/cut-outs are segmented as background pixels inside the part
-    outline and matched against the learned nominal geometry (Hungarian
-    matching). Detects: missing holes, holes not drilled through (edge ring
-    without see-through), mispositioned, too large/small, wrongly shaped and
-    extra holes, as well as outline deviations.
-
-``diff`` – reference image comparison / difference map
-    Per-pixel mean and spread image from the good parts; a new part is
-    compared as a z-score map. Finds surface defects (scratches,
-    discoloration) and anything else that deviates from the reference.
-
-``pca`` – machine learning (unsupervised anomaly detection)
-    PCA subspace of the good parts; the reconstruction error of a new part is
-    the anomaly score. The threshold is calibrated via leave-one-out on the
-    good parts – no defect examples are required.
-
-All methods operate on the aligned part (``AlignedPart``) and return
-``Defect`` objects with a location (canvas coordinates) for visualisation.
-"""
+"""``geometry`` – holes and outline against the nominal geometry learned from the good parts
+(sub-pixel hole measurement, Hungarian matching, tolerances from the spread of the good parts)."""
 
 from __future__ import annotations
 
 import math
 from collections.abc import Collection
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import NamedTuple
 
 import cv2
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-from . import representations as reps
-from .alignment import AlignedPart
-from .config import MethodConfig
-
-DEFECT_LABELS = {
-    "MISSING_HOLE": "Hole missing",
-    "BLIND_HOLE": "Hole not drilled through",
-    "HOLE_POSITION": "Hole mispositioned",
-    "HOLE_DIAMETER": "Wrong hole diameter",
-    "HOLE_SHAPE": "Wrong cut-out shape",
-    "EXTRA_HOLE": "Extra hole/cut-out",
-    "OUTLINE": "Outline deviation",
-    "SURFACE": "Deviation from reference image",
-    "ANOMALY": "ML anomaly",
-}
-
-METHOD_LABELS = {
-    "geometry": "Geometry (holes + outline)",
-    "diff": "Reference image comparison",
-    "pca": "ML anomaly detection (PCA)",
-}
+from ..alignment import AlignedPart
+from .base import (
+    ACCEPT_MARGIN,
+    Defect,
+    Method,
+    MethodResult,
+    components,
+    max_component_area,
+    robust_outliers,
+    split_accepted,
+)
 
 
-@dataclass
-class Defect:
-    kind: str
-    method: str
-    bbox: tuple[int, int, int, int]  # x, y, w, h in canvas coordinates
-    detail: str = ""
-    severity: float = 1.0  # deviation relative to the tolerance
-    channel: str = ""  # lighting channel ("front"/"back") in dual-light mode
-
-    @property
-    def label(self) -> str:
-        return DEFECT_LABELS.get(self.kind, self.kind)
-
-    def to_dict(self) -> dict:
-        return {
-            "kind": self.kind,
-            "label": self.label,
-            "method": self.method,
-            "bbox": [int(v) for v in self.bbox],
-            "detail": self.detail,
-            "severity": round(float(self.severity), 3),
-            "channel": self.channel,
-        }
-
-
-@dataclass
-class MethodResult:
-    method: str
-    ok: bool
-    score: float  # ≥ 1.0 means NOK (normalised to the threshold)
-    defects: list[Defect] = field(default_factory=list)
-    heatmap: np.ndarray | None = None  # float32 [0,1] on the canvas
-    channel: str = ""
-    standalone: float = 1.0  # score this method needs to decide alone (fusion rule)
-    decisive: bool = False  # did this method contribute to the NOK decision?
-
-    def to_dict(self) -> dict:
-        return {
-            "method": self.method,
-            "label": METHOD_LABELS.get(self.method, self.method),
-            "ok": bool(self.ok),
-            "score": round(float(self.score), 3),
-            "defects": len(self.defects),
-            "channel": self.channel,
-            "standalone": float(self.standalone),
-            "decisive": bool(self.decisive),
-        }
-
-
-def _bbox_from_mask(mask: np.ndarray) -> tuple[int, int, int, int]:
-    ys, xs = np.nonzero(mask)
-    return int(xs.min()), int(ys.min()), int(xs.max() - xs.min() + 1), int(ys.max() - ys.min() + 1)
-
-
-def _components(binary: np.ndarray, min_area: float):
-    """Connected regions ≥ min_area → list of (area, bbox, mask)."""
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(binary.astype(np.uint8), connectivity=8)
-    out = []
-    for i in range(1, n):
-        area = stats[i, cv2.CC_STAT_AREA]
-        if area >= min_area:
-            x, y, w, h = stats[i, :4]
-            out.append((float(area), (int(x), int(y), int(w), int(h)), labels == i))
-    return out
-
-
-def robust_outliers(values, floor: float, k: float, factor: float = 1.0) -> list[int]:
-    """Indices of values that stand out clearly from the others (leave-one-out screening).
-
-    Outlier = value ≥ ``floor`` (it would count as a defect at all) AND above
-    median + k · MAD·1.4826 (robust spread, not pulled up by the outliers themselves,
-    so even two or three bad references among 15 are found). ``factor`` raises the limit
-    for less certain methods (ML: its stand-alone level, like in the decision rule).
-    Needs at least 4 values.
-    """
-    v = np.asarray(values, np.float64)
-    if len(v) < 4:
-        return []
-    med = float(np.median(v))
-    spread = 1.4826 * float(np.median(np.abs(v - med)))
-    return [i for i, x in enumerate(v) if x >= floor and x > factor * (med + k * spread)]
-
-
-def _max_component_area(binary: np.ndarray) -> float:
-    n, _, stats, _ = cv2.connectedComponentsWithStats(binary.astype(np.uint8), connectivity=8)
-    return float(np.max(stats[1:, cv2.CC_STAT_AREA])) if n > 1 else 0.0
-
-
-class Method:
-    name = "base"
-
-    def __init__(self, cfg: MethodConfig):
-        self.cfg = cfg
-        self.report: dict = {}
-        # set by fit(): sample index → reasons why this reference differs clearly from the
-        # other references (probably a defective part taught in by mistake)
-        self.suspects: dict[int, list[str]] = {}
-
-    def _flag(self, i: int, why: str) -> None:
-        self.suspects.setdefault(int(i), []).append(why)
-
-    def fit(self, samples: list[AlignedPart], accepted: Collection[int] = ()) -> None:
-        """Learns from good parts. ``accepted`` = indices of parts the operator accepted as good
-        although they deviate ("within our tolerance"): their deviation is tolerated *locally*
-        (at that hole, that place of the image) – the global thresholds stay as they are, so
-        accepting e.g. a shifted hole does not make the method blind for scratches."""
-        raise NotImplementedError
-
-    def score(self, sample: AlignedPart, sens: float = 1.0, mm_per_px: float | None = None) -> MethodResult:
-        """``sens`` > 1 = more sensitive (tolerances/thresholds divided by sens).
-        ``mm_per_px`` (from the camera calibration) switches the reported dimensions to mm."""
-        raise NotImplementedError
-
-    def state(self) -> tuple[dict, dict[str, np.ndarray]]:
-        raise NotImplementedError
-
-    def load_state(self, meta: dict, arrays: dict[str, np.ndarray]) -> None:
-        raise NotImplementedError
-
-
-# ---------------------------------------------------------------------------
-# Geometry
-# ---------------------------------------------------------------------------
 @dataclass
 class Hole:
     cx: float
@@ -308,33 +153,6 @@ def _match_references(
     return per_hole, masks, inconsistent
 
 
-ACCEPT_MARGIN = 1.1  # a deviation the operator accepted is tolerated with 10 % margin
-
-
-def _split(n: int, accepted: Collection[int]) -> tuple[list[int], set[int]]:
-    """→ (indices of the normal good parts, accepted indices). The nominal state (mean image,
-    nominal geometry, thresholds) is learned from the normal parts only; without any normal part
-    all parts count as normal."""
-    acc = {i for i in accepted if 0 <= i < n}
-    normal = [i for i in range(n) if i not in acc]
-    return (normal, acc) if normal else (list(range(n)), set())
-
-
-def _tolerance_map(deviations: list[np.ndarray], conspicuous: list[np.ndarray], size: int) -> np.ndarray:
-    """Local tolerance from the deviations of accepted parts.
-
-    Only where an accepted part was really conspicuous (``conspicuous`` masks) – elsewhere its
-    deviation is ordinary noise/texture, and tolerating it would make the method blind
-    everywhere. There the largest deviation is spread over ``size`` px (position scatter of the
-    next similar parts) and gets a 10 % margin; everywhere else the tolerance is 0."""
-    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
-    parts = []
-    for dev, mask in zip(deviations, conspicuous, strict=True):
-        region = cv2.dilate(mask.astype(np.uint8), k) > 0
-        parts.append(np.where(region, dev, 0).astype(np.float32))
-    return cv2.dilate(np.max(np.stack(parts), axis=0), k) * ACCEPT_MARGIN
-
-
 def _length(px: float, mm_per_px: float | None) -> str:
     """Length for the defect text: mm (if the scale is known) or px."""
     return f"{px * mm_per_px:.2f} mm" if mm_per_px else f"{px:.1f} px"
@@ -350,7 +168,7 @@ class GeometryMethod(Method):
     outline_tolerated: np.ndarray | None = None  # outline deviations accepted by the operator (mask)
 
     def fit(self, samples, accepted=()):
-        normal, acc = _split(len(samples), accepted)
+        normal, acc = split_accepted(len(samples), accepted)
         detected = [find_holes(s, self.cfg.hole_min_area_px)[0] for s in samples]
         counts = [len(detected[i]) for i in normal]
         ref = detected[normal[counts.index(max(set(counts), key=counts.count))]]  # the usual hole count
@@ -367,7 +185,7 @@ class GeometryMethod(Method):
             self.outline_tolerated = cv2.dilate(mask, np.ones((7, 7), np.uint8))
 
         # Outline deviation: the largest deviation among the normal good parts is the baseline
-        base = [_max_component_area(self._outline_diff(s)) for s in samples]
+        base = [max_component_area(self._outline_diff(s)) for s in samples]
         normal_base = [base[i] for i in normal]
         self.outline_min_area = float(max(self.cfg.outline_min_area_px, 1.5 * max(normal_base, default=0)))
         self._screen(per_hole, inconsistent, base)
@@ -447,7 +265,7 @@ class GeometryMethod(Method):
             xor[self.outline_tolerated > 0] = 0
         return cv2.morphologyEx(xor, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))) > 0
 
-    def _rim_edge(self, s: AlignedPart, edges: np.ndarray, i: int) -> float:
+    def _rim_edge(self, edges: np.ndarray, i: int) -> float:
         tmpl = self.hole_masks[i]
         line = cv2.morphologyEx(tmpl, cv2.MORPH_GRADIENT, np.ones((3, 3), np.uint8)) > 0
         band = cv2.dilate(line.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
@@ -543,7 +361,7 @@ class GeometryMethod(Method):
         for e in missing:
             x, y = self.exp_xy[e]
             box = _box_around(x, y, self.exp_d[e])
-            rim = self._rim_edge(s, edges, e)
+            rim = self._rim_edge(edges, e)
             if rim >= self.cfg.rim_edge_threshold:
                 defects.append(
                     Defect("BLIND_HOLE", self.name, box, f"edge present (rim ratio {rim:.2f}) but no see-through", 2.0)
@@ -568,10 +386,11 @@ class GeometryMethod(Method):
         outline = self._outline_diff(s)
         min_area = self.outline_min_area / sens
         defects = []
-        for area, bbox, _ in _components(outline, min_area):
+        comps, largest = components(outline, min_area)
+        for area, bbox, _ in comps:
             text = f"{area * mm_per_px**2:.1f} mm²" if mm_per_px else f"{area:.0f} px"
             defects.append(Defect("OUTLINE", self.name, bbox, f"{text} deviation", area / min_area))
-        return defects, _max_component_area(outline) / min_area
+        return defects, largest / min_area
 
     def state(self):
         meta = {"outline_min_area": self.outline_min_area, "report": self.report}
@@ -600,211 +419,3 @@ class GeometryMethod(Method):
         for k in ("pos_accept", "d_accept", "aspect_accept"):
             setattr(self, k, arrays.get(k, np.zeros(n_e)))
         self.outline_tolerated = arrays.get("outline_tolerated")
-
-
-# ---------------------------------------------------------------------------
-# Reference image comparison (difference map)
-# ---------------------------------------------------------------------------
-class DiffMethod(Method):
-    name = "diff"
-
-    def _rep(self, s: AlignedPart) -> np.ndarray:
-        r = reps.compute(s, self.cfg.diff_representation)
-        b = self.cfg.diff_blur | 1
-        return cv2.GaussianBlur(r, (b, b), 0) if b > 1 else r
-
-    accept_dev: np.ndarray | None = None  # local tolerance from parts the operator accepted
-
-    def _zmap(self, x, mean, std):
-        d = np.abs(x - mean)
-        if self.accept_dev is not None:
-            d = np.maximum(d - self.accept_dev, 0)
-        return d / std * self.region
-
-    def fit(self, samples, accepted=()):
-        normal, acc = _split(len(samples), accepted)
-        all_x = np.stack([self._rep(s) for s in samples])
-        X = all_x[normal]
-        filled = (np.mean([samples[i].filled_mask > 0 for i in normal], axis=0) > 0.5).astype(np.uint8)
-        self.region = (cv2.dilate(filled, np.ones((9, 9), np.uint8)) > 0).astype(np.float32)
-        floor = self.cfg.diff_sigma_floor
-        self.mean = X.mean(0)
-        self.std = np.maximum(X.std(0, ddof=1) if len(X) > 1 else np.zeros_like(self.mean), floor)
-        self.accept_dev = None
-
-        # Leave-one-out: how large do deviation areas get for good parts?
-        loo = []
-        if len(X) >= 3:
-            for i in range(len(X)):
-                rest = np.delete(X, i, axis=0)
-                z = self._zmap(X[i], rest.mean(0), np.maximum(rest.std(0, ddof=1), floor))
-                loo.append(_max_component_area(self._clean(z > self.cfg.diff_z_threshold)))
-        self.min_area = float(max(self.cfg.diff_min_area_px, 1.5 * max(loo, default=0)))
-        self.suspects = {}
-        for i in robust_outliers(loo, self.cfg.diff_min_area_px, self.cfg.screen_k):
-            self._flag(normal[i], f"differs from the other references in the image comparison ({loo[i]:.0f} px)")
-        if acc:  # accepted deviations are tolerated where they are – the global threshold stays
-            devs = [np.abs(all_x[i] - self.mean) for i in sorted(acc)]
-            marked = [d / self.std * self.region > self.cfg.diff_z_threshold / 2 for d in devs]
-            self.accept_dev = _tolerance_map(devs, marked, 7)
-        self.report = {
-            "representation": self.cfg.diff_representation,
-            "loo_max_area_px": [round(v, 1) for v in loo],
-            "min_area_px": round(self.min_area, 1),
-        }
-
-    @staticmethod
-    def _clean(b):
-        return cv2.morphologyEx(b.astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-
-    def score(self, s, sens=1.0, mm_per_px=None):
-        sens = max(float(sens), 1e-3)
-        z = self._zmap(self._rep(s), self.mean, self.std)
-        zt = self.cfg.diff_z_threshold / sens
-        min_area = self.min_area / sens
-        comps = _components(self._clean(z > zt), min_area)
-
-        def area_text(px):
-            return f"{px * mm_per_px**2:.1f} mm²" if mm_per_px else f"{px:.0f} px"
-
-        defects = [
-            Defect("SURFACE", self.name, bbox, f"{area_text(area)}, max z = {float(z[m].max()):.1f}", area / min_area)
-            for area, bbox, m in comps
-        ]
-        score = max([area / min_area for area, _, _ in comps], default=0.0)
-        if not comps:
-            score = _max_component_area(self._clean(z > zt)) / min_area
-        heat = np.clip(z / (2 * zt), 0, 1).astype(np.float32)
-        return MethodResult(self.name, not defects, float(score), defects, heat)
-
-    def state(self):
-        return (
-            {"min_area": self.min_area, "report": self.report},
-            {"mean": self.mean, "std": self.std, "region": self.region}
-            | ({"accept_dev": self.accept_dev} if self.accept_dev is not None else {}),
-        )
-
-    def load_state(self, meta, arrays):
-        self.min_area = meta["min_area"]
-        self.report = meta.get("report", {})
-        self.mean, self.std, self.region = arrays["mean"], arrays["std"], arrays["region"]
-        self.accept_dev = arrays.get("accept_dev")
-
-
-# ---------------------------------------------------------------------------
-# ML: PCA anomaly detection
-# ---------------------------------------------------------------------------
-class PCAMethod(Method):
-    name = "pca"
-
-    def _vec(self, s: AlignedPart):
-        r = reps.compute(s, self.cfg.pca_representation)
-        h, w = r.shape
-        size = (self.cfg.pca_size, max(8, int(round(self.cfg.pca_size * h / w))))
-        return cv2.resize(r, size, interpolation=cv2.INTER_AREA), size
-
-    @staticmethod
-    def _basis(data: np.ndarray, variance: float):
-        mean = data.mean(0)
-        centred = data - mean
-        if len(data) < 2:
-            return mean, np.zeros((0, data.shape[1]), np.float32)
-        _, sv, vt = np.linalg.svd(centred, full_matrices=False)
-        ev = sv**2
-        if ev.sum() <= 0:
-            return mean, np.zeros((0, data.shape[1]), np.float32)
-        k = int(np.searchsorted(np.cumsum(ev) / ev.sum(), variance) + 1)
-        k = min(k, max(1, len(data) - 2))
-        return mean, vt[:k].astype(np.float32)
-
-    def _residual(self, v, mean, comps, size):
-        c = v - mean
-        r = c - (c @ comps.T) @ comps if len(comps) else c
-        rmap = np.abs(r.reshape(size[1], size[0]))
-        return cv2.GaussianBlur(rmap, (3, 3), 0)
-
-    accept_res: np.ndarray | None = None  # local tolerance from parts the operator accepted
-
-    def _effective(self, rmap: np.ndarray) -> np.ndarray:
-        return rmap if self.accept_res is None else np.maximum(rmap - self.accept_res, 0)
-
-    def fit(self, samples, accepted=()):
-        normal, acc = _split(len(samples), accepted)
-        vecs = [self._vec(s) for s in samples]
-        self.size = vecs[0][1]
-        all_x = np.stack([v[0].ravel() for v in vecs]).astype(np.float32)
-        X = all_x[normal]
-        self.mean, self.comps = self._basis(X, self.cfg.pca_variance)
-        self.accept_res = None
-        loo = []
-        if len(X) >= 4:
-            for i in range(len(X)):
-                m, c = self._basis(np.delete(X, i, axis=0), self.cfg.pca_variance)
-                loo.append(float(self._residual(X[i], m, c, self.size).max()))
-        self.suspects = {}
-        if loo:
-            # ML alone is less certain than geometry/comparison → same stand-alone level as in decide()
-            for i in robust_outliers(
-                loo, self.cfg.pca_margin * float(np.median(loo)), self.cfg.screen_k, self.cfg.pca_standalone
-            ):
-                self._flag(normal[i], f"ML anomaly compared with the other references (residual {loo[i]:.3f})")
-            self.threshold = max(self.cfg.pca_margin * float(max(loo)), float(np.mean(loo) + 4 * np.std(loo)))
-        else:
-            self.threshold = self.cfg.pca_residual_threshold
-        if acc:  # accepted deviations are tolerated where they are – the global threshold stays
-            res = [self._residual(all_x[i], self.mean, self.comps, self.size) for i in sorted(acc)]
-            self.accept_res = _tolerance_map(res, [r > self.threshold / 2 for r in res], 3)
-        self.report = {
-            "representation": self.cfg.pca_representation,
-            "components": len(self.comps),
-            "loo_scores": [round(v, 4) for v in loo],
-            "threshold": round(self.threshold, 4),
-        }
-
-    def score(self, s, sens=1.0, mm_per_px=None):
-        v, _ = self._vec(s)
-        rmap = self._effective(self._residual(v.ravel().astype(np.float32), self.mean, self.comps, self.size))
-        thr = self.threshold / max(float(sens), 1e-3)
-        score = float(rmap.max()) / thr
-        h, w = s.gray.shape
-        big = cv2.resize(rmap, (w, h), interpolation=cv2.INTER_LINEAR)
-        defects = []
-        if score >= 1.0:
-            cell = (w / self.size[0]) * (h / self.size[1])
-            for _area, bbox, m in _components(big > thr, cell):
-                defects.append(
-                    Defect(
-                        "ANOMALY",
-                        self.name,
-                        bbox,
-                        f"residual {float(big[m].max()):.3f} (threshold {thr:.3f})",
-                        float(big[m].max()) / thr,
-                    )
-                )
-            if not defects:
-                defects.append(Defect("ANOMALY", self.name, _bbox_from_mask(big >= np.max(big) * 0.9), "", score))
-        heat = np.clip(big / (2 * thr), 0, 1).astype(np.float32)
-        return MethodResult(self.name, bool(score < 1.0), float(score), defects, heat)
-
-    def state(self):
-        return (
-            {"threshold": self.threshold, "size": list(self.size), "report": self.report},
-            {"mean": self.mean, "comps": self.comps}
-            | ({"accept_res": self.accept_res} if self.accept_res is not None else {}),
-        )
-
-    def load_state(self, meta, arrays):
-        self.threshold = meta["threshold"]
-        self.size = tuple(meta["size"])
-        self.report = meta.get("report", {})
-        self.mean, self.comps = arrays["mean"], arrays["comps"]
-        self.accept_res = arrays.get("accept_res")
-
-
-METHODS: dict[str, type[Method]] = {"geometry": GeometryMethod, "diff": DiffMethod, "pca": PCAMethod}
-
-
-def create(name: str, cfg: MethodConfig) -> Method:
-    if name not in METHODS:
-        raise ValueError(f"Unknown method '{name}'. Available: {', '.join(METHODS)}")
-    return METHODS[name](cfg)

@@ -49,7 +49,6 @@ from .synthetic import PART_TYPES
 from .teach import TeachIn
 from .trigger import PartTrigger
 
-MODES = ("idle", "camera_setup", "learning", "training", "inspecting")
 PREVIEW_WIDTH = 640
 QUEUE_PARTS = 3  # parts waiting for inspection before new ones are not inspected
 MESSAGES_KEPT = 30
@@ -105,6 +104,11 @@ class QCSystem:
             f"System started – camera: {camera.name}"
             + (f", {cfg.camera.mm_per_px} mm/px" if cfg.camera.mm_per_px else ""),
         )
+
+    def _require_idle(self) -> None:
+        """Mode changes and settings that affect the camera only from idle (call under the lock)."""
+        if self.mode != "idle":
+            raise ValueError("Stop the current mode first.")
 
     def log(self, level: str, text: str) -> None:
         """Message for the UI (last 30) and the log file (``data/logs/qc.log``, see cli.py)."""
@@ -287,8 +291,7 @@ class QCSystem:
     def start_camera_setup(self) -> None:
         """Step 1 of the automatic camera setup: ONE good part lies still under the camera."""
         with self.lock:
-            if self.mode != "idle":
-                raise ValueError("Stop the current mode first.")
+            self._require_idle()
             if not self.camera.can_control:
                 raise ValueError("This camera source cannot be adjusted automatically (Pi camera or simulator only).")
             self.mode = "camera_setup"
@@ -333,8 +336,7 @@ class QCSystem:
         if axis not in ("x", "y"):
             raise ValueError("Belt direction must be x (left ↔ right) or y (top ↕ bottom).")
         with self.lock:
-            if self.mode != "idle":
-                raise ValueError("Stop the current mode first.")
+            self._require_idle()
             self.cam.base_axis = axis
             model = self.model
             prof = model.camera_profile if model is not None else None
@@ -353,8 +355,7 @@ class QCSystem:
         if mode not in ("pass", "still"):
             raise ValueError("Capture mode must be pass (part passes through) or still (part stops in the centre).")
         with self.lock:
-            if self.mode != "idle":
-                raise ValueError("Stop the current mode first.")
+            self._require_idle()
             self.cfg.trigger.mode = mode
             self.trigger.armed, self.trigger.prev_pos, self.trigger.moving_captures = True, None, 0
             self.trigger.track.clear()
@@ -373,8 +374,7 @@ class QCSystem:
     def start_learning(self, name: str, auto_finish: bool = False) -> None:
         """``auto_finish``: create the model automatically once the target number of parts is reached."""
         with self.lock:
-            if self.mode != "idle":
-                raise ValueError("Stop the current mode first.")
+            self._require_idle()
             self.teach.start(name, auto_finish)
             self.mode = "learning"
             self.cam.begin_teach_in()
@@ -466,8 +466,7 @@ class QCSystem:
         with self.lock:
             if self.model is None:
                 raise ValueError("No model selected.")
-            if self.mode != "idle":
-                raise ValueError("Stop the current mode first.")
+            self._require_idle()
             self.mode = "inspecting"
         self.log("info", f"Inspection started with model “{self.model.name}”.")
 
@@ -505,8 +504,7 @@ class QCSystem:
             raise ValueError("Model not found.")
         model = QCModel.load(path)
         with self.lock:
-            if self.mode != "idle":
-                raise ValueError("Stop the current mode first.")
+            self._require_idle()
             self._set_model(model)
         self.log("info", f"Model “{model.name}” loaded.")
 

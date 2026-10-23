@@ -293,7 +293,6 @@ class SimulatorSource(CameraSource):
     backlight, simulated exposure, zoom and focus for the automatic camera setup)."""
 
     name = "Simulator"
-    MM_PER_PX = 0.25  # simulated scale at 640 px image width (plate A ≈ 75 × 42 mm)
     NOISE_FRAMES = 8  # sensor noise frames reused in turn (new random numbers per frame cost ~14 ms)
 
     def __init__(self, cfg: CameraConfig, seed: int | None = None):
