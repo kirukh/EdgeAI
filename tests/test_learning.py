@@ -182,7 +182,7 @@ def test_operator_acceptance_updates_the_model_during_inspection(make_system):
     # a part already inspected with version 1 when the update was released may still be logged as 1
     wait(lambda: s.results.history[0]["model_version"] == 2, 60)
     s.stop_inspection()
-    assert next(m for m in s.list_models() if m["slug"] == "Plate")["has_previous"]
+    assert next(m for m in s.models.list() if m["slug"] == "Plate")["has_previous"]
     s.improve.undo("Plate")
     assert s.model.version == 1
 

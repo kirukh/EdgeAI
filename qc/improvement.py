@@ -14,34 +14,29 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Callable
-from pathlib import Path
 
 import numpy as np
 
 from .config import AppConfig
 from .learning import KNOWN_BAD, PENDING, LearningStore, release, update_model
-from .model import QCModel, model_path, restore_previous
+from .model import QCModel, restore_previous
+from .model_store import ModelStore
 
 
 class ModelImprovement:
     def __init__(
         self,
         cfg: AppConfig,
+        models: ModelStore,
         lock: threading.RLock,
         active_model: Callable[[], QCModel | None],
         set_model: Callable[[QCModel], None],
         log: Callable[[str, str], None],
     ):
-        self.cfg, self.lock, self.log = cfg, lock, log
+        self.cfg, self.models, self.lock, self.log = cfg, models, lock, log
         self.active_model, self.set_model = active_model, set_model
         self.running = False  # a model update is being trained
         self.last: dict | None = None  # report of the last update (released or rejected)
-
-    def _path(self, slug: str) -> Path:
-        path = model_path(self.cfg.storage.models_dir, slug)
-        if path is None:
-            raise ValueError("Model not found.")
-        return path
 
     # ------------------------------------------------------------------ operator decisions
     def on_feedback(self, model: QCModel | None, entry: dict, frame: np.ndarray | None, outcome: str) -> dict:
@@ -75,7 +70,7 @@ class ModelImprovement:
     # ------------------------------------------------------------------ model updates
     def update_now(self, slug: str) -> None:
         """Button in the setup area: learn the waiting accepted parts now."""
-        if LearningStore(self._path(slug)).count(PENDING) == 0:
+        if LearningStore(self.models.path(slug)).count(PENDING) == 0:
             raise ValueError("No accepted parts are waiting for this model.")
         self.start(slug, manual=True)
 
@@ -88,7 +83,7 @@ class ModelImprovement:
                 return
             model = self.active_model()
             if slug is not None and (model is None or model.slug != slug):
-                model = QCModel.load(self._path(slug))
+                model = self.models.load(slug)
             if model is None or model.path is None:
                 raise ValueError("Model not found.")
             self.running = True
@@ -137,7 +132,7 @@ class ModelImprovement:
 
     def undo(self, slug: str) -> None:
         """Back to the version before the last update (can itself be undone the same way)."""
-        path = self._path(slug)
+        path = self.models.path(slug)
         with self.lock:
             if self.running:
                 raise ValueError("A model update is running – try again in a moment.")
@@ -150,11 +145,11 @@ class ModelImprovement:
 
     # ------------------------------------------------------------------ accepted parts
     def waiting(self, slug: str) -> list[dict]:
-        return [{"name": stem, **info} for stem, _, info in LearningStore(self._path(slug)).items(PENDING)]
+        return [{"name": stem, **info} for stem, _, info in LearningStore(self.models.path(slug)).items(PENDING)]
 
     def discard(self, slug: str, name: str) -> None:
         """A part was accepted by mistake – it is not learned."""
-        path = model_path(self.cfg.storage.models_dir, slug)
+        path = self.models.find(slug)
         if path is None or LearningStore(path).image_path(PENDING, name) is None:
             raise ValueError("Accepted part not found.")
         LearningStore(path).remove(PENDING, [name])

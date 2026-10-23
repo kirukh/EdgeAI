@@ -8,7 +8,7 @@ from flask import Blueprint, abort, jsonify, request, send_file
 
 from .. import archive as qa
 from ..learning import PENDING, LearningStore
-from ..model import QCModel, model_path
+from ..model import QCModel
 from .operator_api import auth, body, ok, system
 
 bp = Blueprint("setup", __name__, url_prefix="/api")
@@ -23,7 +23,7 @@ def require_pin():
 
 @bp.get("/models/<slug>")
 def model_detail(slug: str):
-    path = model_path(system().cfg.storage.models_dir, slug)
+    path = system().models.find(slug)
     if path is None:
         return abort(404)
     m = QCModel.load(path)
@@ -54,7 +54,7 @@ def waiting(slug: str):
 
 @bp.get("/models/<slug>/waiting/<name>.png")
 def waiting_image(slug: str, name: str):
-    path = model_path(system().cfg.storage.models_dir, slug)
+    path = system().models.find(slug)
     img = LearningStore(path).image_path(PENDING, name) if path is not None else None
     if img is None:
         return abort(404)

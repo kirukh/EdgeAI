@@ -24,12 +24,10 @@ from __future__ import annotations
 
 import logging
 import queue
-import shutil
 import threading
 import time
 from collections import deque
 from datetime import datetime
-from pathlib import Path
 
 import cv2
 import numpy as np
@@ -42,8 +40,8 @@ from .config import AppConfig
 from .drift import DriftMonitor
 from .improvement import ModelImprovement
 from .inspection import inspect_part
-from .learning import KNOWN_BAD, PENDING, LearningStore
-from .model import MIN_REFERENCES, QCModel, has_previous, list_models, model_path
+from .model import MIN_REFERENCES, QCModel
+from .model_store import ModelStore
 from .results import OUTCOME_TEXT, ResultStore
 from .synthetic import PART_TYPES
 from .teach import TeachIn
@@ -58,6 +56,17 @@ DRIFT_HINTS = {
     "background": "The belt / background brightness has changed. Check ambient light, clean the belt or backlight.",
     "area": "Parts look bigger or smaller than when taught. Has the camera been moved?",
 }
+NOTICE_NO_CAMERA = "No camera image. Check the camera cable and restart the device."
+NOTICE_SELECT_PART = "Select a part, or teach in a new part."
+NOTICE_NOT_SHARP = (
+    "The camera image is not sharp – the lens has to be focused once (setup technician). "
+    "Detection is less precise until then."
+)
+NOTICE_NOT_STOPPED = (
+    "{n} part(s) did not stop in the image centre and were photographed while moving. Check where the belt "
+    "stops, or switch the capture mode to “part passes through” (setup area)."
+)
+NOTICE_SKIPPED = "{n} part(s) could not be inspected because the system could not keep up. Slow the belt down."
 PREVIEW_LABEL = {
     "idle": "READY",
     "camera_setup": "ADJUSTING CAMERA",
@@ -93,8 +102,8 @@ class QCSystem:
         self._burst: dict | None = None
         self._last_folder_step = 0.0
         self.folder_interval = 1.0
-        self.improve = ModelImprovement(cfg, self.lock, lambda: self.model, self._set_model, self.log)
-        Path(cfg.storage.models_dir).mkdir(parents=True, exist_ok=True)
+        self.models = ModelStore(cfg.storage.models_dir)
+        self.improve = ModelImprovement(cfg, self.models, self.lock, lambda: self.model, self._set_model, self.log)
         for section in cfg.ignored:
             self.log("warn", f"config.json: section “{section}” belongs to the full version and is ignored.")
         if getattr(camera, "info", ""):
@@ -178,22 +187,7 @@ class QCSystem:
     def _poll_trigger(self, frame: np.ndarray, t_capture: float) -> tuple[np.ndarray | None, bool]:
         """Was a part captured in this frame? → (image of the part or None, manual capture?)"""
         active = self.mode in ("learning", "inspecting")
-        part = None
-        if self.camera.continuous:
-            if self.trigger.update(frame) and active:
-                part = frame
-            if self.cam.path is not None and self.mode == "learning":
-                with self.lock:
-                    self.cam.track(frame, t_capture)
-            if self._burst is not None:
-                self._continue_burst(frame)
-        elif (
-            isinstance(self.camera, FolderSource)
-            and self.mode == "inspecting"
-            and time.time() - self._last_folder_step > self.folder_interval
-        ):
-            part = self.camera.next_part()  # image folder: one image per interval
-            self._last_folder_step = time.time()
+        part = self._poll_belt(frame, t_capture, active) if self.camera.continuous else self._poll_folder()
         manual = self._manual.is_set()
         if manual:
             self._manual.clear()
@@ -201,6 +195,25 @@ class QCSystem:
                 frame = self.camera.next_part()
             part = frame if active else None
         return part, manual
+
+    def _poll_belt(self, frame: np.ndarray, t_capture: float, active: bool) -> np.ndarray | None:
+        """Conveyor: the trigger decides; meanwhile the belt path is measured and burst shots collected."""
+        fired = self.trigger.update(frame)
+        if self.cam.path is not None and self.mode == "learning":
+            with self.lock:
+                self.cam.track(frame, t_capture)
+        if self._burst is not None:
+            self._continue_burst(frame)
+        return frame if fired and active else None
+
+    def _poll_folder(self) -> np.ndarray | None:
+        """Image folder: one image per interval while inspecting."""
+        if not isinstance(self.camera, FolderSource) or self.mode != "inspecting":
+            return None
+        if time.time() - self._last_folder_step <= self.folder_interval:
+            return None
+        self._last_folder_step = time.time()
+        return self.camera.next_part()
 
     def _on_part(self, frame: np.ndarray, manual: bool) -> None:
         """A part was triggered: during inspection collect further shots while it passes."""
@@ -433,7 +446,7 @@ class QCSystem:
                 prof["sharp"] = edge <= self.cfg.autosetup.edge_width_max_px
             model.camera_profile = prof
             # a new teach-in starts fresh (no accepted parts of the old version); the old one can be restored
-            model.save(self.cfg.storage.models_dir, keep_previous=True, keep_side_data=False)
+            self.models.save(model, keep_previous=True, keep_side_data=False)
         except Exception as e:
             with self.lock:
                 self.mode = "learning"
@@ -499,19 +512,14 @@ class QCSystem:
             self.cam.apply(model.camera_profile)
 
     def select_model(self, slug: str) -> None:
-        path = model_path(self.cfg.storage.models_dir, slug)
-        if path is None:
-            raise ValueError("Model not found.")
-        model = QCModel.load(path)
+        model = self.models.load(slug)
         with self.lock:
             self._require_idle()
             self._set_model(model)
         self.log("info", f"Model “{model.name}” loaded.")
 
     def delete_model(self, slug: str) -> None:
-        path = model_path(self.cfg.storage.models_dir, slug)
-        if path is None:
-            raise ValueError("Model not found.")
+        self.models.path(slug)  # "Model not found" before anything changes
         with self.lock:
             if self.improve.running:
                 raise ValueError("A model update is running – try again in a moment.")
@@ -519,13 +527,11 @@ class QCSystem:
                 if self.mode == "inspecting":
                     raise ValueError("The active model cannot be deleted while inspection is running.")
                 self._set_model(None)
-            shutil.rmtree(path)
+            self.models.delete(slug)
         self.log("info", f"Model “{slug}” deleted.")
 
     def set_sensitivity(self, slug: str, values: dict[str, float]) -> dict[str, float]:
-        path = model_path(self.cfg.storage.models_dir, slug)
-        if path is None:
-            raise ValueError("Model not found.")
+        path = self.models.path(slug)
         with self.lock:
             model = self.model if self.model is not None and self.model.slug == slug else QCModel.load(path)
             model.set_sensitivity(values)
@@ -533,14 +539,6 @@ class QCSystem:
             "info", f"Sensitivity of “{model.name}”: " + ", ".join(f"{k} ×{v:g}" for k, v in model.sensitivity.items())
         )
         return model.sensitivity
-
-    def list_models(self) -> list[dict]:
-        models = list_models(self.cfg.storage.models_dir)
-        for m in models:
-            path = Path(self.cfg.storage.models_dir) / m["slug"]
-            store = LearningStore(path)
-            m.update(waiting=store.count(PENDING), known_bad=store.count(KNOWN_BAD), has_previous=has_previous(path))
-        return models
 
     # ------------------------------------------------------------------ results
     def feedback(self, rid: str, verdict: str) -> dict:
@@ -606,40 +604,19 @@ class QCSystem:
     # ------------------------------------------------------------------ status
     def supervisor_notices(self) -> list[dict]:
         """Short plain-language hints for the operator screen (no technical details)."""
-        out: list[dict] = []
-        if self.camera.continuous and self.fps == 0 and self.last_frame is None:
-            out.append({"level": "error", "text": "No camera image. Check the camera cable and restart the device."})
-        if self.model is None and self.mode == "idle":
-            out.append({"level": "info", "text": "Select a part, or teach in a new part."})
-        if self.model is not None:
-            keys = {r["key"] for r in self.drift.state()["rows"] if r["warning"]}
-            out += [{"level": "warn", "text": text} for k, text in DRIFT_HINTS.items() if k in keys]
-            if (self.model.camera_profile or {}).get("sharp") is False:
-                out.append(
-                    {
-                        "level": "warn",
-                        "text": "The camera image is not sharp – the lens has to be focused "
-                        "once (setup technician). Detection is less precise until then.",
-                    }
-                )
-        if self.cfg.trigger.mode == "still" and self.trigger.moving_captures:
-            out.append(
-                {
-                    "level": "warn",
-                    "text": f"{self.trigger.moving_captures} part(s) did not stop in the image centre and were "
-                    "photographed while moving. Check where the belt stops, or switch the capture mode to "
-                    "“part passes through” (setup area).",
-                }
-            )
-        out += self.improve.notices(self.model)
-        if self.results.skipped:
-            out.append(
-                {
-                    "level": "error",
-                    "text": f"{self.results.skipped} part(s) could not be inspected because the "
-                    "system could not keep up. Slow the belt down.",
-                }
-            )
+        m, n_moving, n_skipped = self.model, self.trigger.moving_captures, self.results.skipped
+        drift = {r["key"] for r in self.drift.state()["rows"] if r["warning"]} if m is not None else set()
+        checks = [
+            (self.camera.continuous and self.fps == 0 and self.last_frame is None, "error", NOTICE_NO_CAMERA),
+            (m is None and self.mode == "idle", "info", NOTICE_SELECT_PART),
+            *[(key in drift, "warn", text) for key, text in DRIFT_HINTS.items()],
+            (m is not None and (m.camera_profile or {}).get("sharp") is False, "warn", NOTICE_NOT_SHARP),
+            (self.cfg.trigger.mode == "still" and n_moving > 0, "warn", NOTICE_NOT_STOPPED.format(n=n_moving)),
+        ]
+        out = [{"level": level, "text": text} for show, level, text in checks if show]
+        out += self.improve.notices(m)
+        if n_skipped:
+            out.append({"level": "error", "text": NOTICE_SKIPPED.format(n=n_skipped)})
         return out
 
     def status(self) -> dict:

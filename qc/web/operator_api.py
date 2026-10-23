@@ -172,7 +172,7 @@ def inspect_stop():
 
 @bp.get("/api/models")
 def models():
-    return jsonify(system().list_models())
+    return jsonify(system().models.list())
 
 
 @bp.post("/api/models/<slug>/select")
