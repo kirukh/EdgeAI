@@ -27,6 +27,8 @@ What cannot be automated: turning a lens by hand, moving the camera, the light i
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
+from typing import Any
 
 import cv2
 import numpy as np
@@ -117,7 +119,7 @@ def part_extent(contour: np.ndarray) -> tuple[float, float, float]:
     return float(cx), float(cy), 2.0 * float(r)
 
 
-def to_sensor(u: float, v: float, out_size: tuple[int, int], crop) -> tuple[float, float]:
+def to_sensor(u: float, v: float, out_size: tuple[int, int], crop: Sequence[float]) -> tuple[float, float]:
     """Pixel in the output image → position as a fraction of the full sensor."""
     x, y, w, h = crop
     return x + u / out_size[0] * w, y + v / out_size[1] * h
@@ -138,7 +140,7 @@ def crop_for_path(
     return (round(x, 5), round(y, 5), round(f, 5), round(f, 5)), round(1.0 / f, 3)
 
 
-def path_from_track(points: list[tuple[float, float, float]]) -> dict | None:
+def path_from_track(points: list[tuple[float, float, float]]) -> dict[str, Any] | None:
     """Belt direction and speed from the centroid track of one passing part.
     ``points`` = (time s, x, y) in sensor fractions. Returns None if the part did not move."""
     if len(points) < 3:

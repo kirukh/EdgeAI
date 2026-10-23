@@ -1,6 +1,6 @@
 [project]
 name = "pi-qc"
-version = "2.1.2"
+version = "2.2.0"
 description = "Camera-based OK/NOK inspection of metal parts on a conveyor (Raspberry Pi)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -14,7 +14,7 @@ dependencies = [
 # Raspberry Pi only (via apt, not pip): python3-picamera2
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "mypy>=1.10"]
+dev = ["pytest>=8", "pytest-cov>=5", "pytest-xdist>=3.5", "threadpoolctl>=3.1", "ruff>=0.6", "mypy>=1.10"]
 
 [project.scripts]
 qc = "qc.cli:main"
@@ -24,7 +24,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["qc", "qc.web"]
+packages = ["qc", "qc.methods", "qc.web"]
 
 [tool.setuptools.package-data]
 "qc.web" = ["static/*"]
@@ -33,7 +33,7 @@ packages = ["qc", "qc.web"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "--strict-markers"
+addopts = "--strict-markers -n auto"  # parallel (pytest-xdist); -n 0 = serial, e.g. for debugging
 
 [tool.coverage.run]
 source = ["qc"]
@@ -55,25 +55,25 @@ select = [
     "C90",      # cyclomatic complexity
     "RUF",      # ruff-specific checks
     "N",        # PEP 8 naming
+    "D1",       # PEP 257: docstrings for modules, classes and public functions/methods
 ]
 ignore = [
     "N806",     # upper-case local names are conventional for matrices/images in image processing (H, W, K)
     "N812",     # "import methods as M" style module aliases
     "RUF001", "RUF002", "RUF003",  # ×, –, “ ” in UI texts and comments are intentional
     "RUF046",   # int(round(x)) is needed: with NumPy 1.x (Raspberry Pi OS Bookworm) round() of a NumPy float is a float
+    "D105", "D107",  # magic methods and __init__: the class docstring describes them
 ]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 15
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["C90"]
+"tests/*" = ["C90", "D1"]  # test names say what they check
 
 # ---------------------------------------------------------------- types (PEP 484)
 [tool.mypy]
 python_version = "3.11"
 files = ["qc"]
-ignore_missing_imports = true
-check_untyped_defs = true
-warn_unused_ignores = true
-warn_redundant_casts = true
+strict = true                 # all functions annotated, no implicit Any (PEP 484)
+ignore_missing_imports = true # scipy and picamera2 (Pi only) ship without type information

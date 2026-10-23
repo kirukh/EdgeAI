@@ -1,5 +1,96 @@
 # Changelog
 
+## 2.2.0 – code quality: refactoring, strict types, docstrings (2026-10-23)
+
+No change to the inspection: a golden master of 428 parts (4 synthetic scenarios incl. any rotation and backlight,
+both stop-and-go videos, save/load and a model update with release check) gives identical results – status,
+defects and every method score – before and after every step.
+
+- **Double work removed:** the outline check and the image comparison found the regions of the same image twice
+  (`connectedComponentsWithStats` for the defects and again for the largest region) – now one pass. Measured gain is
+  small (≈ 1.5 % per image, 14.9 → 14.7 ms on a PC, single thread): these were the cheap calls; most of the time
+  stays in the alignment (≈ 64 %), which was already optimised – `rotation_search: "flip"` is the big lever there.
+- **Structure:** `qc/methods.py` (810 lines) → package `qc/methods/` (`base`, `geometry`, `diff`, `pca`), public
+  names unchanged. `qc/model_store.py` (`ModelStore`): finding, loading, listing, saving and deleting models – one
+  place for "Model not found" instead of five copies. `system.py`: `_require_idle()` instead of six copies of the
+  idle check, the operator notices as a table of conditions, trigger polling split into belt and image folder.
+- **Dead code removed:** `SimulatorSource.MM_PER_PX`, `MODES`, an unused argument of `_rim_edge`.
+- **Types:** `mypy --strict` was at 300 findings (133 functions without annotations, 73 generic types without
+  element types) – now 0, and `strict = true` in `pyproject.toml`, so CI keeps it that way.
+- **Docstrings:** 213 added – every module, class and public function/method (PEP 257); ruff checks it (`D1`).
+- `body()` of the web API returns `{}` for a JSON body that is not an object (was an error 500).
+- README: standards table and project structure updated.
+
+## 2.1.7 – capture mode "still" for a stop-and-go belt (2026-10-21)
+
+- **`trigger.mode = "still"`**: the picture is taken only once the part has rested inside the centre band for
+  `trigger.still_frames` frames (default 3), never while it moves or brakes. Switch in the setup area (*Camera &
+  focus → Take the picture*), saved in config.json. A part that leaves the band without stopping is still captured
+  (in motion), counted, and the operator screen shows a notice. `pass` (default) is unchanged.
+- Reason: real test with a stop-and-go video filmed from a screen – in 98 of 200 good parts the first image was
+  NOK, because "pass" fires on the frame in which the part arrives (motion blur / screen ghost); the majority vote
+  corrected it. On that video "still" captures all 100 parts two frames after they come to rest.
+- Simulator: `camera.sim_stop_frames` (parts rest in the image centre). 3 new tests.
+
+## 2.1.6 – belt direction for a turned camera (2026-10-21)
+
+- Setup area → *Camera & focus* → **Belt direction in the camera image**: left ↔ right (trigger lines vertical) or
+  top ↕ bottom (camera turned by 90°, trigger lines horizontal). Takes effect immediately, is saved in the config file
+  the app was started with (`"trigger": {"axis": …}`, all other settings kept) and taken over by the active model's
+  camera profile. Only while idle; needs the setup PIN. The trigger itself already supported both directions
+  (`trigger.axis`), only the switch was missing. Test `test_belt_direction_can_be_switched_for_a_turned_camera`.
+- `AppConfig.persist()` writes one setting back into the config file; `QCModel.save_meta()`.
+
+## 2.1.5 – focus assistant ends with the setup area (2026-10-21)
+
+- The focus assistant kept running for up to 10 minutes after the setup area was left ("← Operator view · lock")
+  or its PIN session timed out. The operator screen has no button to switch it off, so its box stayed in the live
+  image instead of the normal trigger lines. It now switches off as soon as no device has the setup area open
+  (locked or timed out). Test `test_focus_assistant_ends_with_the_setup_area` (fails on 2.1.4).
+
+## 2.1.4 – part detection next to rails, UI theme (2026-10-20)
+
+- **Part detection ignores structures at the image border.** Bright guide rails along the belt (or any bright or dark
+  structure that runs out of the image) made the automatic polarity take the dark belt for the part: it touched the
+  image border, was never "complete", the trigger never fired (teach-in only with "Capture now") and a model taught
+  that way rated every part NOK. Now the polarity is the one in which a large object lies completely inside the
+  image, and the part is the largest such object; the old border rule remains the fallback for parts entering or
+  leaving the image. Such an object must also differ from its surroundings by at least
+  `localization.min_part_contrast` grey levels (default 25), so belt texture or noise on an empty belt never counts
+  as a part. Tested with a conveyor video (rails top and bottom): before 0 of 20 teach-in parts and 0 of 100
+  test parts captured, now 20/20 and 100/100 (also with `trigger.detect_width` 240 as on the Pi). New test
+  `test_rails_at_the_image_border_are_not_the_part`. The synthetic evaluation is unchanged (identical table).
+- **UI theme "measuring table"**: graphite machine bar with a safety-yellow edge, faint measuring grid, viewfinder
+  corners around the camera image, monospace for labels and numbers. OK/NOK as solid colour blocks with white text
+  (readable from a distance); NOK is also striped, so it differs from OK not only by colour. Light and dark scheme,
+  system fonts only (offline, CSP unchanged). Screenshots in `docs/` updated.
+
+## 2.1.3 – CI, faster tests, code clean-up (2026-10-14)
+
+No change to the inspection: the synthetic evaluation (`qc evaluate --synthetic`, 4 scenarios × 15 configurations)
+gives exactly the same table as 2.1.2.
+
+- **Continuous integration** (`.github/workflows/ci.yml`): `ruff format --check`, `ruff check`, `mypy` and
+  `pytest --cov` on Python 3.11 (Raspberry Pi OS Bookworm) and 3.13 (Trixie) for every pull request and every push
+  to `main`.
+- **Tests 3.5× faster** (158 s → ~45 s on 4 cores): they run in parallel (`pytest-xdist`, one thread per worker –
+  NumPy/OpenCV threads on top of the workers made a parallel run slower than a serial one), and the simulator reuses
+  8 pre-generated sensor noise frames instead of drawing new random numbers for every frame (33 → 11 ms per frame;
+  this also lowers the CPU load of the simulator in the web UI). Training and test data (`synthetic.compose`) are
+  unchanged.
+- **Test coverage 91 % → 94 %** (77 tests): all image representations, `qc evaluate` with own photo folders and CSV
+  output, the Pi camera with focus motor (Camera Module 3) against the picamera2 stand-in, the camera sources from
+  the config, the operator endpoints (live image, PIN state, result images, feedback).
+- **`qc/improvement.py`**: the continuous-improvement logic (operator decisions, background update, release, undo,
+  accepted parts, notices) moved out of `QCSystem` into its own component `ModelImprovement`, like `CameraSetup`
+  (`system.py` 791 → 638 lines). The setup API calls `system.improve.…`.
+- **Type check with current libraries:** `mypy` reported 17 errors against the type information of NumPy 2.5 and
+  OpenCV 5 (earlier runs had not seen it). Fixed with annotations; `read_image()` gives a clear error for an
+  unreadable image in `qc evaluate` instead of failing later.
+- Test fix: `test_operator_acceptance_updates_the_model_during_inspection` failed about once in 10 runs – a part
+  that was already being inspected with version 1 when version 2 was released is correctly logged as version 1;
+  the test now waits for the first part of version 2.
+
 ## 2.1.2 – Raspberry Pi OS Trixie (2026-10-12)
 
 - `deploy/install.sh`: no fixed `numpy<2` any more. On Raspberry Pi OS Trixie (Debian 13, Python 3.13) `picamera2`

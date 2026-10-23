@@ -16,6 +16,7 @@ import itertools
 from collections import deque
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -43,7 +44,7 @@ def _counter_key(outcome: str) -> str:
     return "confirmed" if outcome.startswith("confirmed") else outcome
 
 
-def _append_csv(path: Path, header: list[str], row: list) -> None:
+def _append_csv(path: Path, header: list[str], row: list[Any]) -> None:
     new = not path.exists()
     with path.open("a", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
@@ -53,25 +54,28 @@ def _append_csv(path: Path, header: list[str], row: list) -> None:
 
 
 class ResultStore:
+    """Inspection history, counters, supervisor feedback and the CSV logs of the day."""
+
     def __init__(self, cfg: StorageConfig, work_width: int = 640):
         self.cfg = cfg
         self.work_width = work_width
-        self.history: deque[dict] = deque(maxlen=cfg.history_size)
+        self.history: deque[dict[str, Any]] = deque(maxlen=cfg.history_size)
         self.images: dict[str, tuple[bytes, bytes]] = {}  # image id → (overlay, detail) as JPEG
         self.frames: dict[str, np.ndarray] = {}  # image id → inspected image (for "Result wrong?")
         self.counts = {"OK": 0, "NOK": 0, "NO_PART": 0}
         self.feedback_counts = {"false_alarm": 0, "missed": 0, "confirmed": 0}
         self.skipped = 0  # parts that could not be inspected (Pi overloaded)
-        self.last_result: dict | None = None
+        self.last_result: dict[str, Any] | None = None
         self._ids = itertools.count(1)
         Path(cfg.results_dir).mkdir(parents=True, exist_ok=True)
 
     def day_dir(self) -> Path:
+        """Results folder of today (created if needed)."""
         day = Path(self.cfg.results_dir) / datetime.now().strftime("%Y-%m-%d")
         day.mkdir(parents=True, exist_ok=True)
         return day
 
-    def add(self, res: InspectionResult, frame: np.ndarray | None) -> dict:
+    def add(self, res: InspectionResult, frame: np.ndarray | None) -> dict[str, Any]:
         """Counts, keeps and logs one inspected part. Returns the entry shown in the UI."""
         res.image_id = f"{next(self._ids):06d}"
         entry = res.to_dict()
@@ -104,9 +108,9 @@ class ResultStore:
         day = self.day_dir()
         stem = f"{datetime.now().strftime('%H%M%S_%f')[:-3]}_{res.status}"
         save = (res.status == "NOK" and self.cfg.save_nok_images) or (res.status == "OK" and self.cfg.save_ok_images)
-        save = save and res.overlay is not None
-        if save:
-            cv2.imwrite(str(day / f"{stem}_marked.jpg"), res.overlay)
+        overlay = res.overlay if save else None
+        if overlay is not None:
+            cv2.imwrite(str(day / f"{stem}_marked.jpg"), overlay)
             if frame is not None:
                 cv2.imwrite(str(day / f"{stem}_original.png"), frame)
         _append_csv(
@@ -118,7 +122,7 @@ class ResultStore:
                 res.status,
                 " | ".join(f"{x.label}: {x.detail}" for x in res.defects),
                 f"{res.time_ms:.0f}",
-                stem if save else "",
+                stem if overlay is not None else "",
                 res.ground_truth or "",
                 res.image_id,
                 "/".join(res.shots),
@@ -126,7 +130,8 @@ class ResultStore:
             ],
         )
 
-    def entry(self, rid: str) -> dict:
+    def entry(self, rid: str) -> dict[str, Any]:
+        """History entry of a result id (KeyError if it is no longer in the history)."""
         entry = next((h for h in self.history if h["image_id"] == rid), None)
         if entry is None:
             raise ValueError("Result not found (only the recent history can be corrected).")
@@ -164,6 +169,7 @@ class ResultStore:
         return outcome
 
     def reset(self) -> None:
+        """New batch: counters and history are cleared."""
         self.counts = {"OK": 0, "NOK": 0, "NO_PART": 0}
         self.feedback_counts = {"false_alarm": 0, "missed": 0, "confirmed": 0}
         self.skipped = 0

@@ -21,11 +21,13 @@
     "sim_speed_px": 14.0,
     "sim_defocus": 0.0,
     "sim_part_scale": 1.0,
-    "sim_autofocus": false
+    "sim_autofocus": false,
+    "sim_stop_frames": 0
   },
   "localization": {
     "polarity": "auto",
     "min_part_area_ratio": 0.02,
+    "min_part_contrast": 25.0,
     "border_margin_px": 4,
     "canvas_margin_ratio": 0.12,
     "use_ecc_refine": true,
@@ -37,6 +39,8 @@
   "trigger": {
     "center_band_ratio": 0.12,
     "axis": "x",
+    "mode": "pass",
+    "still_frames": 3,
     "detect_width": 320,
     "rearm_frames": 3
   },

@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quality Inspection</title>
+<link rel="stylesheet" href="static/app.css">
+</head>
+<body>
+<!-- ============================ OPERATOR VIEW ============================ -->
+<div id="simple">
+  <div class="s-top">
+    <h1>Quality Inspection</h1>
+    <select id="sModel" title="Part type"></select>
+    <span class="grow"></span>
+    <span class="s-state" id="sState">–</span>
+    <button class="s-lock" id="sLock" title="Setup area for the setup technician (PIN)">🔒 Setup</button>
+  </div>
+  <div class="notices" id="sNotices"></div>
+  <div class="s-main">
+    <div>
+      <div class="s-live viewfinder"><img id="sLive" alt="Camera image"></div>
+      <div class="row" style="margin-top:8px">
+        <span class="s-note" id="sTrig"></span>
+        <button class="small hidden" id="sCapture" title="For a stopped conveyor">Capture now</button>
+      </div>
+      <div class="s-last hidden" id="sLastWrap">
+        <div class="s-note" style="margin:12px 0 4px">Last inspected part – defects are marked in red</div>
+        <img id="sLast" alt="Last part">
+      </div>
+    </div>
+
+    <div class="s-panel" id="sRun">
+      <div class="big" id="sBig">–<small id="sBigSub">Press Start to begin</small></div>
+      <ul class="why" id="sWhy"></ul>
+      <div class="row s-wrong hidden" id="sWrongRow">
+        <span class="s-note">Result wrong?</span><button id="sWrong"></button><span class="fb good" id="sWrongState"></span>
+      </div>
+      <div class="bigbtns">
+        <button class="go wide" id="sStart">▶ Start inspection</button>
+        <button id="sTeach">＋ Teach in new part</button>
+        <button id="sBatch">✓ Finish batch</button>
+      </div>
+      <div class="s-counts">
+        <div class="ok"><b id="sOK">0</b>OK</div><div class="nok"><b id="sNOK">0</b>NOK</div><div><b id="sRate">–</b>NOK rate</div>
+      </div>
+      <div class="dots" id="sDots" title="Last parts (tap to show)"></div>
+    </div>
+
+    <div class="s-panel wiz hidden" id="sWiz"></div>
+  </div>
+</div>
+
+<div class="modal hidden" id="pinModal">
+  <div class="card">
+    <h2>Setup area</h2>
+    <p class="hint" style="margin-top:0">For the setup technician. Enter the PIN.</p>
+    <input type="password" inputmode="numeric" autocomplete="off" id="pinInput">
+    <div class="row" style="margin-top:12px; justify-content:flex-end">
+      <button id="pinCancel">Cancel</button><button class="primary" id="pinOk">Unlock</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================ SETUP (EXPERT) VIEW ============================ -->
+<div id="expert" class="hidden">
+<header>
+  <button class="small" id="btnOperator" title="Back to the simple operator screen and lock the setup area">← Operator view · lock</button>
+  <h1>AI Quality Inspection · Metal Parts</h1>
+  <span class="pill" id="mode">–</span>
+  <span class="pill" id="scalePill" title="Scale (camera.mm_per_px in config.json)">–</span>
+  <span class="pill hidden" id="driftPill" title="Image quality differs from the learning phase">Drift</span>
+  <span class="meta" id="cam"></span>
+  <span class="meta" id="activeModel"></span>
+</header>
+<div class="banner hidden" id="banner"></div>
+
+<main>
+  <div class="col">
+    <section class="card live">
+      <h2>Live view</h2>
+      <div class="viewfinder"><img id="live" alt="Camera image"></div>
+      <div class="row" style="margin-top:10px">
+        <button id="btnCapture" title="Capture without the trigger (e.g. when the conveyor is stopped)">Manual capture</button>
+        <span class="hint" id="triggerHint"></span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Inspection result</h2>
+      <div class="result-head">
+        <span class="badge none" id="resBadge">–</span>
+        <div style="flex:1">
+          <div id="resTitle">No inspection yet</div>
+          <div class="hint" id="resMeta"></div>
+        </div>
+        <div class="shots" id="resShots" title="Result of each shot (majority vote)"></div>
+      </div>
+      <div id="resImgs"></div>
+      <ol class="defects" id="resDefects"></ol>
+      <div class="scores" id="resScores"></div>
+      <div class="feedback hidden" id="feedback">
+        <div class="row">
+          <b style="font-size:13px">Supervisor check:</b>
+          <button class="small" id="fbCorrect">✓ Correct</button>
+          <button class="small" id="fbWrong"></button>
+          <span class="fb" id="fbState"></span>
+        </div>
+        <p class="hint">Feedback shows the real hit rate (false alarms, missed defects) in the statistics and the archive.
+          If false alarms repeat: lower the sensitivity of the method (Models tab) or teach the part in again.</p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>History</h2>
+      <table>
+        <thead><tr><th>Time</th><th>Result</th><th>Defects</th><th>Review</th><th id="gtHead">Expected</th><th>ms</th></tr></thead>
+        <tbody id="history"></tbody>
+      </table>
+    </section>
+  </div>
+
+  <div class="col">
+    <nav class="tabs">
+      <button data-tab="op" class="on">Overview</button>
+      <button data-tab="models">Models</button>
+      <button data-tab="setup">Setup</button>
+    </nav>
+
+    <!-- ============================== OVERVIEW ============================== -->
+    <div class="col" data-pane="op">
+      <section class="card">
+        <h2>Statistics</h2>
+        <div class="stats">
+          <div class="ok"><b id="cOK">0</b>OK</div>
+          <div class="nok"><b id="cNOK">0</b>NOK</div>
+          <div><b id="cRate">–</b>NOK rate</div>
+        </div>
+        <p class="hint" id="fbStats"></p>
+        <div class="row" style="margin-top:10px"><button id="btnReset">Reset counters</button></div>
+      </section>
+
+      <section class="card archives">
+        <h2>Results archive</h2>
+        <p class="hint" style="margin-top:0">Archives are created with “Finish batch” on the operator screen. Each ZIP contains
+          the inspection log, NOK images, supervisor feedback and a summary.</p>
+        <div id="archiveList"></div>
+      </section>
+
+      <section class="card">
+        <h2>Messages</h2>
+        <div class="msgs" id="msgs"></div>
+      </section>
+    </div>
+
+    <!-- ============================== MODELS ============================== -->
+    <div class="col hidden" data-pane="models">
+      <section class="card models">
+        <h2>Models</h2>
+        <p class="hint" style="margin-top:0">Sensitivity: &gt; 1 = stricter (tighter tolerances/thresholds), &lt; 1 = more tolerant.
+          Takes effect immediately, no retraining needed.</p>
+        <div id="models"></div>
+        <pre class="report hidden" id="report"></pre>
+      </section>
+    </div>
+
+    <!-- ============================== SETUP ============================== -->
+    <div class="col hidden" data-pane="setup">
+      <section class="card">
+        <h2>Inspection</h2>
+        <p class="hint" style="margin-top:0" id="inspInfo"></p>
+      </section>
+
+      <section class="card">
+        <h2>Camera &amp; focus</h2>
+        <div class="kv"><span>Camera</span><span id="camInfo">–</span></div>
+        <label class="settings">Belt direction in the camera image
+          <select id="beltAxis">
+            <option value="x">↔ Left – right (trigger lines vertical)</option>
+            <option value="y">↕ Top – bottom (camera turned 90°, trigger lines horizontal)</option>
+          </select>
+        </label>
+        <p class="hint" style="margin-top:4px">Turn the camera so the belt runs straight in the image, then choose the direction.
+          Saved in config.json. A part taught in before the camera was turned has to be taught in again.</p>
+        <label class="settings">Take the picture
+          <select id="trigMode">
+            <option value="pass">while the part passes the centre (continuous belt)</option>
+            <option value="still">when the part rests in the centre (stop-and-go belt, sharpest image)</option>
+          </select>
+        </label>
+        <p class="hint" style="margin-top:4px">Rests in the centre: the picture is taken only once the part has stopped between
+          the lines. A part that does not stop is still photographed as it leaves the lines – the operator screen then
+          shows a notice.</p>
+        <div class="row" style="margin-top:10px">
+          <button class="primary" id="btnFocus">Focus assistant on</button>
+          <span id="focusVal" class="hint"></span>
+        </div>
+        <p class="hint">For lenses focused by hand (Camera Module v2, HQ, Global Shutter): put a part under the camera,
+          switch the assistant on and turn the lens slowly. The value in the live image is highest when the image is sharp –
+          turn past the maximum and back until it shows ≈ 100 %. Then fix the lens (drop of glue / lock ring) and teach in again.</p>
+      </section>
+
+      <section class="card">
+        <h2>Image quality / drift</h2>
+        <p class="hint" style="margin-top:0">Median of the last parts compared with the learning phase.</p>
+        <table class="drift"><thead><tr><th>Value</th><th>Learned</th><th>Now</th><th>Deviation</th></tr></thead>
+          <tbody id="driftRows"></tbody></table>
+      </section>
+
+      <section class="card hidden" id="simCard">
+        <h2>Simulator</h2>
+        <div class="settings">
+          <label>Lighting
+            <select id="simLight"><option value="front">Front light (lamp above the belt)</option><option value="back">Backlight (lamp below the belt)</option></select>
+          </label>
+          <label>Part type
+            <select id="simPart"><option value="A">A – plate with two holes</option><option value="B">B – hole + slot</option>
+              <option value="C">C – triangle with three holes</option><option value="D">D – square with four holes</option></select>
+          </label>
+          <label>Rotation on the belt
+            <select id="simAngle"><option value="0">Roughly aligned (±6°, sometimes 180°)</option><option value="1">Any rotation (0–360°)</option></select>
+          </label>
+          <label>Defect rate: <span id="simRateVal"></span>
+            <input type="range" id="simRate" min="0" max="1" step="0.05" style="width:100%">
+          </label>
+        </div>
+        <p class="hint">Lighting and part type change the image – existing models will no longer match (teach in again).</p>
+      </section>
+    </div>
+  </div>
+</main>
+</div>
+
+<script src="static/common.js"></script>
+<script src="static/setup.js"></script>
+<script src="static/operator.js"></script>
+</body>
+</html>

@@ -68,7 +68,9 @@ function render(s) {
   $("banner").classList.toggle("hidden", !banner.length);
 
   $("triggerHint").textContent = s.continuous
-    ? (s.mode === "idle" ? "Trigger inactive (start learning or inspection mode first)" : s.armed ? "Trigger armed – waiting for the next part" : "Part captured – waiting until it leaves the image")
+    ? (s.mode === "idle" ? "Trigger inactive (start learning or inspection mode first)"
+      : s.armed ? (s.trigger_mode === "still" ? "Trigger armed – waiting for a part to stop in the centre" : "Trigger armed – waiting for the next part")
+      : "Part captured – waiting until it leaves the image")
     : "Image folder: automatic in inspection mode, click to capture in learning mode";
   $("btnCapture").disabled = !["learning", "inspecting"].includes(s.mode);
 
@@ -84,6 +86,12 @@ function render(s) {
   const cst = s.camera_state || {};
   $("camInfo").textContent = (s.camera_info || s.camera) + (cst.exposure_us ? ` · now: exposure ${(cst.exposure_us / 1000).toFixed(2)} ms, gain ${(+cst.gain).toFixed(2)}` : "")
     + ` · zoom ${cst.zoom}× · belt axis ${cst.axis}` + (cst.auto ? " (automatic camera profile of this part)" : "");
+  if (document.activeElement !== $("beltAxis")) $("beltAxis").value = cst.axis || "x";
+  if (document.activeElement !== $("trigMode")) $("trigMode").value = s.trigger_mode || "pass";
+  for (const id of ["beltAxis", "trigMode"]) {
+    $(id).disabled = s.mode !== "idle";
+    $(id).title = s.mode !== "idle" ? "Stop the inspection / teach-in first" : "";
+  }
   const fa = s.focus_assist;
   $("btnFocus").textContent = fa ? "Focus assistant off" : "Focus assistant on";
   $("btnFocus").className = fa ? "" : "primary";
@@ -231,6 +239,8 @@ $("models").addEventListener("click", async (e) => {
 $("btnCapture").onclick = () => api("api/capture", "POST");
 $("btnReset").onclick = () => api("api/counters/reset", "POST").then(() => { lastImageId = null; $("history").innerHTML = ""; });
 $("btnFocus").onclick = () => api("api/focus", "POST", { on: !status.focus_assist });
+$("trigMode").onchange = (e) => api("api/trigger-mode", "POST", { mode: e.target.value }).catch(() => { e.target.value = status.trigger_mode || "pass"; });
+$("beltAxis").onchange = (e) => api("api/belt-axis", "POST", { axis: e.target.value }).catch(() => { e.target.value = status.camera_state?.axis || "x"; });
 $("simLight").onchange = (e) => api("api/sim", "POST", { lighting: e.target.value });
 $("simPart").onchange = (e) => api("api/sim", "POST", { part_type: e.target.value });
 $("simAngle").onchange = (e) => api("api/sim", "POST", { any_angle: e.target.value === "1" });

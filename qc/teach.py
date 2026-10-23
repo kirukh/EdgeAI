@@ -13,6 +13,8 @@ THUMB_WIDTH = 200
 
 
 class TeachIn:
+    """Reference images of a part type being taught in."""
+
     def __init__(self, target: int, loc_cfg: LocalizationConfig):
         self.target = target
         self.loc_cfg = loc_cfg
@@ -23,6 +25,7 @@ class TeachIn:
         self.edges: list[float] = []  # sharpness (10–90 % edge width) of every reference
 
     def start(self, name: str, auto_finish: bool = False) -> None:
+        """Starts a teach-in for ``name`` (``auto_finish``: train as soon as the target count is reached)."""
         name = name.strip()
         if not name:
             raise ValueError("Please enter a name for the part type.")
@@ -30,14 +33,17 @@ class TeachIn:
         self.name, self.auto_finish = name, auto_finish
 
     def clear(self) -> None:
+        """Discards the captured references."""
         self.captures, self.thumbs, self.edges = [], [], []
 
     @property
     def count(self) -> int:
+        """Number of captured references."""
         return len(self.captures)
 
     @property
     def complete(self) -> bool:
+        """Has the target number of references been reached?"""
         return self.auto_finish and self.count >= self.target
 
     def add(self, frame: np.ndarray) -> bool:

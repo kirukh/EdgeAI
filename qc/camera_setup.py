@@ -36,6 +36,8 @@ EXPOSURE_ROUNDS = 12
 
 
 class CameraSetup:
+    """Camera profiles per part type, the automatic camera setup and the focus assistant."""
+
     def __init__(
         self,
         camera: CameraSource,
@@ -48,19 +50,20 @@ class CameraSetup:
         self.camera, self.cfg, self.trigger, self.log = camera, cfg, trigger, log
         self.wait_frames, self.latest_frame = wait_frames, latest_frame
         self.base_axis = cfg.trigger.axis
-        self.applied: dict | None = None  # settings currently applied to the camera
-        self.status: dict | None = None  # running/last static setup (shown in the UI)
-        self.pending_profile: dict | None = None  # result of the static step, waiting for teach-in
-        self.profile: dict | None = None  # profile of the part being taught in
-        self.path: dict | None = None  # first moving part during teach-in: belt direction + zoom
-        self.focus: dict | None = None  # focus assistant {"until", "best", "value"}
+        self.applied: dict[str, Any] | None = None  # settings currently applied to the camera
+        self.status: dict[str, Any] | None = None  # running/last static setup (shown in the UI)
+        self.pending_profile: dict[str, Any] | None = None  # result of the static step, waiting for teach-in
+        self.profile: dict[str, Any] | None = None  # profile of the part being taught in
+        self.path: dict[str, Any] | None = None  # first moving part during teach-in: belt direction + zoom
+        self.focus: dict[str, Any] | None = None  # focus assistant {"until", "best", "value"}
 
     @property
     def controllable(self) -> bool:
+        """Can this camera be adjusted automatically (exposure, gain, zoom)?"""
         return bool(self.camera.can_control and self.cfg.autosetup.enabled)
 
     # ------------------------------------------------------------------ profiles
-    def apply(self, profile: dict | None, force: bool = False) -> None:
+    def apply(self, profile: dict[str, Any] | None, force: bool = False) -> None:
         """Applies a part type's camera profile (or the base settings from config.json)."""
         cam, base, p = self.camera, self.cfg.camera, profile or {}
         exposure: tuple[int, float] | None
@@ -104,10 +107,11 @@ class CameraSetup:
             self.apply(None)  # never teach in with another part's zoom
 
     def end_teach_in(self) -> None:
+        """Teach-in finished or cancelled: the belt path measurement ends."""
         self.profile, self.path = None, None
 
     # ------------------------------------------------------------------ static step
-    def run(self) -> dict:
+    def run(self) -> dict[str, Any]:
         """Static step of the automatic setup (blocking, run it in a thread). Returns the profile."""
         self.status = {
             "running": True,
@@ -209,7 +213,9 @@ class CameraSetup:
         self.log("warn", "Autofocus did not find a sharp image – check that the part is in the middle.")
         return None
 
-    def _measure(self, exposure: int, gain: float, gains, lens: float | None) -> dict:
+    def _measure(
+        self, exposure: int, gain: float, gains: tuple[float, float] | None, lens: float | None
+    ) -> dict[str, Any]:
         """Size, position, contrast and sharpness of the part → camera profile."""
         self._step("measuring")
         self.wait_frames(4)
@@ -241,7 +247,7 @@ class CameraSetup:
         prof["notes"] = self._notes(prof, gain, diameter, edge)
         return prof
 
-    def _notes(self, prof: dict, gain: float, diameter: tuple[float, float], edge: float | None) -> list[str]:
+    def _notes(self, prof: dict[str, Any], gain: float, diameter: tuple[float, float], edge: float | None) -> list[str]:
         ac, notes = self.cfg.autosetup, []
         if prof["contrast"] < LOW_CONTRAST:
             notes.append(
@@ -284,7 +290,7 @@ class CameraSetup:
             return True
         return False
 
-    def finish_path(self, path: dict | None, out_size: tuple[int, int] | None = None) -> None:
+    def finish_path(self, path: dict[str, Any] | None, out_size: tuple[int, int] | None = None) -> None:
         """Belt direction known (or a stopped belt: ``path`` None) → digital zoom along the path and
         an exposure limit for the belt speed."""
         ac, prof = self.cfg.autosetup, self.profile
@@ -325,6 +331,8 @@ class CameraSetup:
     def set_focus_assist(self, on: bool) -> None:
         """Live sharpness value in the camera image – for lenses that are focused by hand
         (Camera Module v2/IMX219, HQ camera, Global Shutter camera)."""
+        if not on and self.focus is None:
+            return
         self.focus = {"until": time.time() + FOCUS_MINUTES * 60, "best": 0.0, "value": 0.0} if on else None
         self.log(
             "info",
@@ -389,7 +397,7 @@ class CameraSetup:
             )
         return True
 
-    def state(self) -> dict:
+    def state(self) -> dict[str, Any]:
         """Camera state for the UI."""
         exp = (self.applied or {}).get("exposure")
         return {

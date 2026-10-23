@@ -15,28 +15,32 @@ from __future__ import annotations
 
 import csv
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Any
 
-import cv2
 import numpy as np
 
-from .camera import IMAGE_EXT
+from .camera import IMAGE_EXT, read_image
 from .config import LocalizationConfig, MethodConfig
 from .model import QCModel, TrainingError
 
 
 @dataclass
 class EvalRow:
+    """One configuration of the evaluation: false-alarm rate, detection rate (overall and per defect), time."""
+
     config: str
     fpr: float
     recall: float
-    per_defect: dict[str, float] = field(default_factory=dict)
+    per_defect: dict[str, float] = field(default_factory=dict[str, Any])
     time_ms: float = 0.0
     note: str = ""
 
 
 def default_grid(base: MethodConfig) -> list[tuple[str, MethodConfig]]:
+    """Configurations compared by ``qc evaluate``: each method with several representations, plus combinations."""
     grid = [("geometry", replace(base, methods=["geometry"]))]
     for r in ["norm", "gray", "clahe", "edges", "canny", "binary", "lab_ab", "hsv_s"]:
         grid.append((f"diff[{r}]", replace(base, methods=["diff"], diff_representation=r)))
@@ -66,12 +70,13 @@ def load_labeled_folder(test_dir: str | Path) -> list[tuple[np.ndarray, str]]:
             label = rel[1] if len(rel) > 2 else "nok"
         else:
             continue
-        items.append((cv2.imread(str(p)), label))
+        items.append((read_image(p), label))
     return items
 
 
 def load_folder(folder: str | Path) -> list[np.ndarray]:
-    return [cv2.imread(str(p)) for p in sorted(Path(folder).rglob("*")) if p.suffix.lower() in IMAGE_EXT]
+    """All images of a folder (recursively, sorted by name)."""
+    return [read_image(p) for p in sorted(Path(folder).rglob("*")) if p.suffix.lower() in IMAGE_EXT]
 
 
 def evaluate(
@@ -79,8 +84,9 @@ def evaluate(
     test: list[tuple[np.ndarray, str]],
     grid: list[tuple[str, MethodConfig]],
     loc: LocalizationConfig | None = None,
-    progress=print,
+    progress: Callable[[str], object] | None = print,
 ) -> list[EvalRow]:
+    """Trains every configuration of ``grid`` on ``train`` and measures it on the labelled ``test`` images."""
     loc = loc or LocalizationConfig()
     labels = sorted({lbl for _, lbl in test if lbl != "ok"})
     rows = []
@@ -114,11 +120,12 @@ def evaluate(
 
 
 def to_markdown(rows: list[EvalRow], title: str = "") -> str:
+    """Evaluation table as Markdown."""
     labels = sorted({k for r in rows for k in r.per_defect})
     head = ["Configuration", "False alarms", "Detection (all)", *labels, "ms/part"]
     lines = [f"### {title}" if title else "", "", "| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
 
-    def pct(v):
+    def pct(v: float) -> str:
         return "–" if v != v else f"{v * 100:.0f} %"
 
     for r in rows:
@@ -131,7 +138,8 @@ def to_markdown(rows: list[EvalRow], title: str = "") -> str:
     return "\n".join(lines).strip() + "\n"
 
 
-def to_csv(rows: list[EvalRow], path: str | Path, extra: dict | None = None) -> None:
+def to_csv(rows: list[EvalRow], path: str | Path, extra: dict[str, Any] | None = None) -> None:
+    """Appends the evaluation rows to a CSV file (header only for a new file)."""
     labels = sorted({k for r in rows for k in r.per_defect})
     path = Path(path)
     new = not path.exists()
@@ -149,7 +157,16 @@ def to_csv(rows: list[EvalRow], path: str | Path, extra: dict | None = None) -> 
             )
 
 
-def synthetic_sets(part_type: str, lighting: str, n_train=15, n_good=40, n_per_defect=10, seed=0, any_angle=False):
+def synthetic_sets(
+    part_type: str,
+    lighting: str,
+    n_train: int = 15,
+    n_good: int = 40,
+    n_per_defect: int = 10,
+    seed: int = 0,
+    any_angle: bool = False,
+) -> tuple[list[np.ndarray], list[tuple[np.ndarray, str]]]:
+    """Synthetic training images (good parts) and labelled test images (``ok`` or the defect type)."""
     from . import synthetic as S
 
     rng = np.random.default_rng(seed)

@@ -1,0 +1,375 @@
+"""Central configuration.
+
+All parameters live in dataclasses and can be overridden via a JSON file
+(``config.json``). Fields that are not specified keep their default value.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import asdict, dataclass, field, fields, is_dataclass
+from pathlib import Path
+from typing import Any
+
+
+@dataclass
+class CameraConfig:
+    """Camera source, resolution, exposure and white balance (plus the simulator settings)."""
+
+    # "sim", "pi", "usb:0", "folder:/path/to/images"
+    source: str = "sim"
+    width: int = 1280
+    height: int = 960
+    fps: int = 20
+    # A fixed exposure is essential for reproducible images (see "controlled lighting").
+    # 0 = automatic (only useful for first tests).
+    exposure_us: int = 4000
+    analogue_gain: float = 1.0
+    lock_white_balance: bool = True
+    colour_gains: tuple[float, float] = (1.6, 1.6)
+    # Focus (only cameras with autofocus, e.g. Camera Module 3):
+    # None = focus ONCE at start-up on what is under the camera, then keep the lens fixed.
+    # A number = fixed lens position in dioptres (1 / distance in m, e.g. 4.0 = 25 cm).
+    # Continuous autofocus is never used – it would refocus between parts.
+    lens_position: float | None = None
+    # Sensor mode (Pi camera): the raw readout of the sensor, scaled by the ISP to width × height.
+    # Camera Module v2 (IMX219): [1640, 1232] = 2×2 binned, FULL field of view, less noise.
+    # None = libcamera chooses (beware: 1920×1080 on the IMX219 is a CROP of the image centre).
+    sensor_mode: list[int] | None = None
+    # Scale for reporting dimensions in mm: millimetres per pixel of the working image
+    # (localization.work_width) at the FULL field of view, i.e. without digital zoom (the zoom
+    # of a part type is taken into account automatically). Measure it once: length of a part
+    # in mm / its length in px in the working image. None = everything in pixels.
+    mm_per_px: float | None = None
+    # Simulator
+    sim_lighting: str = "front"  # "front" (front light) or "back" (backlight)
+    sim_part_type: str = "A"  # "A" 2 holes, "B" hole + slot, "C" triangle, "D" square
+    sim_any_angle: bool = False  # parts arrive in any rotation (0–360°)
+    sim_defect_rate: float = 0.3
+    sim_speed_px: float = 14.0  # conveyor speed per frame
+    sim_defocus: float = 0.0  # simulated lens blur (Gaussian sigma in px)
+    sim_part_scale: float = 1.0  # < 1 = camera mounted higher (parts appear smaller)
+    sim_autofocus: bool = False  # simulate a camera with focus motor (Camera Module 3)
+    sim_stop_frames: int = 0  # stop-and-go belt: each part rests this many frames in the image centre
+
+
+@dataclass
+class LocalizationConfig:
+    """Finding the part and bringing it into the normalised pose."""
+
+    # "auto" detects whether the part is brighter or darker than the background
+    polarity: str = "auto"  # "auto" | "bright" | "dark"
+    min_part_area_ratio: float = 0.02  # minimum part area relative to the image
+    # An object inside the image counts as a part only if it differs this much (grey levels) from its
+    # surroundings – patches of belt texture or noise on an empty belt do not
+    min_part_contrast: float = 25.0
+    border_margin_px: int = 4  # part must not touch the image border
+    canvas_margin_ratio: float = 0.12  # margin around the aligned part
+    use_ecc_refine: bool = True  # sub-pixel fine alignment via ECC
+    # What the fine alignment uses as datum: "outline" (outer contour, like datum edges on a
+    # drawing – displaced holes cannot hide their offset), "all" (outline + holes) or
+    # "auto" (outline, except for round parts, whose outline carries no rotation information)
+    ecc_datum: str = "auto"
+    # Rotation search: "full" (0–360°, any shape/orientation), "flip" (0°/180° only – parts
+    # guided mechanically, faster) or "off" (parts always arrive in the same orientation)
+    rotation_search: str = "full"
+    # Accept parts lying upside down (mirror image)? Sensible for flat parts with
+    # through holes; keep False if the mirrored part counts as a different part.
+    allow_mirror: bool = False
+    work_width: int = 640  # internal working resolution (width)
+
+
+@dataclass
+class TriggerConfig:
+    """Conveyor trigger: when the picture of a part is taken."""
+
+    # Capture as soon as the part is fully visible and inside the centre band
+    center_band_ratio: float = 0.12
+    # Conveyor direction: "x" (left↔right) or "y" (top↔bottom)
+    axis: str = "x"
+    # "pass": capture when the part crosses the image centre (also while it moves);
+    # "still": stop-and-go belt – capture only once the part rests in the centre band (sharp image).
+    # A part that does not stop is still captured when it leaves the band (and counted).
+    mode: str = "pass"
+    still_frames: int = 3  # "still": frames without movement before the capture
+    detect_width: int = 320  # resolution for the fast part detection
+    rearm_frames: int = 3  # frames without a centred part before re-arming
+
+
+@dataclass
+class MethodConfig:
+    """Inspection methods, their image representations and the decision rule."""
+
+    # Enabled inspection methods (combined with OR → one method NOK = part NOK)
+    methods: list[str] = field(default_factory=lambda: ["geometry", "diff", "pca"])
+    # Image representation per method (see qc/representations.py)
+    diff_representation: str = "norm"
+    pca_representation: str = "edges"
+
+    # --- Geometry: holes + outline ---
+    hole_min_area_px: int = 40
+    pos_tol_px: float = 6.0  # minimum position tolerance
+    dia_tol_ratio: float = 0.10  # minimum diameter tolerance (relative)
+    tol_sigma: float = 4.0  # tolerance = max(minimum tolerance, k·σ from learning)
+    rim_edge_threshold: float = 0.25  # edge ratio on the hole rim → "not drilled through"
+    shape_tol_ratio: float = 0.25  # aspect-ratio tolerance (slot/cut-out)
+    outline_min_area_px: int = 80  # minimum area of an outline deviation
+    # Absolute tolerances from the drawing (used instead of the learned ones once the
+    # camera is calibrated in mm). None = use the learned tolerances.
+    pos_tol_mm: float | None = None  # max. hole position deviation
+    dia_tol_mm: float | None = None  # max. hole diameter deviation (±)
+
+    # --- Reference screening (teach-in) ---
+    # Every reference is compared with the OTHER references (leave-one-out). A reference that
+    # stands out clearly – usually a defective part taught in by mistake – is excluded and
+    # reported. Without this, one bad reference loosens the thresholds of the statistical
+    # methods many times over and the model becomes blind to that kind of defect.
+    screen_references: bool = True
+    screen_k: float = 5.0  # outlier: value > median + k · robust spread (MAD)
+    screen_max_ratio: float = 0.25  # exclude at most this share of the references
+
+    # --- Decision: how the methods are combined ---
+    # "fusion": a method decides on its own only above its "standalone" level; below that
+    #           (score 1.0 … standalone) at least two methods must agree.
+    # "or":     any method with score ≥ 1 → NOK (most sensitive, most false alarms)
+    decision: str = "fusion"
+    geometry_standalone: float = 1.0  # geometry measurements are reliable → decide alone
+    diff_standalone: float = 1.0
+    pca_standalone: float = 1.5  # ML alone only if clearly above its threshold
+
+    # --- Reference image comparison (difference map) ---
+    diff_z_threshold: float = 6.0
+    diff_sigma_floor: float = 0.04
+    diff_blur: int = 5
+    diff_min_area_px: int = 30
+
+    # --- PCA anomaly detection (ML) ---
+    pca_size: int = 96  # width of the downscaled image
+    pca_variance: float = 0.95
+    pca_margin: float = 1.5  # threshold = margin · max(leave-one-out score)
+    pca_residual_threshold: float = 0.25
+
+
+@dataclass
+class StorageConfig:
+    """Where models, results and archives are stored, and which images are kept."""
+
+    models_dir: str = "data/models"
+    results_dir: str = "data/results"
+    archive_dir: str = "data/archive"  # ZIP archives of finished batches
+    save_ok_images: bool = False
+    save_nok_images: bool = True
+    history_size: int = 50
+
+
+@dataclass
+class InspectionConfig:
+    """Several images per part and the majority vote."""
+
+    # Always several images of the same part while it passes the camera, majority vote – random
+    # false alarms (dust, a reflection, sensor noise) disappear. Fixed, minimum 3 (5 is possible).
+    # To save time, the 2nd/3rd image is only evaluated when the 1st is not CLEARLY good.
+    shots_per_part: int = 3
+    confirm_margin: float = 0.5  # 1st image clearly good = every method score below this (half its threshold)
+    tie_is_nok: bool = True  # with an even number of shots: tie → NOK (safe side)
+
+
+@dataclass
+class LearningConfig:
+    """Continuous improvement from the operator's decisions."""
+
+    # Continuous improvement (qc/learning.py): the operator accepts NOK parts that are within the
+    # company's tolerance ("Result wrong?"); the model learns these deviations as acceptable.
+    enabled: bool = True
+    # update the model automatically once this many accepted parts are waiting (in the background,
+    # inspection keeps running); 0 = only with the button in the setup area
+    update_after: int = 5
+    max_waiting: int = 100  # accepted parts kept until the next update
+    max_known_bad: int = 100  # confirmed defective parts kept for the release check
+
+
+@dataclass
+class DriftConfig:
+    """Image-quality drift monitor."""
+
+    window: int = 20  # parts in the rolling window
+    contrast_tol: float = 0.15  # ±15 % contrast part ↔ belt (lighting ageing, exposure)
+    background_tol: float = 20.0  # grey levels (ambient light, dirty belt/backlight)
+    area_tol: float = 0.03  # ±3 % part area (camera distance/zoom changed)
+    sharpness_tol: float = 0.25  # −25 % edge steepness (focus, motion blur)
+
+
+@dataclass
+class AutoSetupConfig:
+    """Automatic camera setup."""
+
+    # Automatic camera setup when a part type is taught in (see qc/autosetup.py)
+    enabled: bool = True
+    target_level: float = 225.0  # 99.5th percentile of part + surroundings after the setup
+    min_exposure_us: int = 100
+    max_exposure_us: int = 8000  # upper limit before the belt speed is known
+    max_gain: float = 4.0  # more gain = more noise; above that "more light needed"
+    max_blur_px: float = 0.5  # motion blur limit in output pixels (after zoom)
+    max_zoom: float = 2.5  # IMX219 1640×1232 readout → ≥ 656 sensor px for 640 output px
+    margin_along: float = 2.0  # crop length along the belt = 2.0 × part size (room for the trigger)
+    margin_across: float = 1.6  # crop width across the belt = 1.6 × part size (position scatter)
+    edge_width_max_px: float = 3.0  # 10–90 % edge rise above this = image not sharp
+
+
+@dataclass
+class UIConfig:
+    """Web UI: setup PIN, preview rate and quality."""
+
+    # PIN for the setup area (sensitivity, models, focus assistant, archives, simulator).
+    # The supervisor screen needs no PIN. "" = setup area without PIN. CHANGE THE DEFAULT.
+    setup_pin: str = "1234"
+    setup_timeout_min: int = 30  # setup area locks itself after this idle time
+    preview_fps: float = 12.0  # live image in the browser (lower = less CPU, e.g. 5 on a Pi 3)
+    preview_quality: int = 75  # JPEG quality of the live image
+
+
+@dataclass
+class AppConfig:
+    """Complete configuration (``config.json``); unknown keys and invalid values are reported, not ignored."""
+
+    camera: CameraConfig = field(default_factory=CameraConfig)
+    localization: LocalizationConfig = field(default_factory=LocalizationConfig)
+    trigger: TriggerConfig = field(default_factory=TriggerConfig)
+    method: MethodConfig = field(default_factory=MethodConfig)
+    storage: StorageConfig = field(default_factory=StorageConfig)
+    inspection: InspectionConfig = field(default_factory=InspectionConfig)
+    drift: DriftConfig = field(default_factory=DriftConfig)
+    learning: LearningConfig = field(default_factory=LearningConfig)
+    ui: UIConfig = field(default_factory=UIConfig)
+    autosetup: AutoSetupConfig = field(default_factory=AutoSetupConfig)
+    target_reference_count: int = 15
+    # Sections of older versions that were found in the file and ignored (logged at start-up)
+    ignored: list[str] = field(default_factory=list, repr=False)
+    # File the configuration was loaded from – settings changed in the UI are written back there
+    path: str = field(default="", repr=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Configuration as a plain dict (without the internal fields)."""
+        d = asdict(self)
+        d.pop("ignored")
+        d.pop("path")
+        return d
+
+    def persist(self, section: str, key: str, value: Any) -> bool:
+        """Writes one setting into the config file (all other entries are kept). False without a file."""
+        if not self.path:
+            return False
+        p = Path(self.path)
+        data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+        data.setdefault(section, {})[key] = value
+        tmp = p.with_name(p.name + ".tmp")
+        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        os.replace(tmp, p)
+        return True
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> AppConfig:
+        """Configuration from a dict (sections of version 1 are dropped and listed in ``ignored``), validated."""
+        data = dict(data)
+        ignored = sorted(k for k in REMOVED_SECTIONS if data.pop(k, None) is not None)
+        data.pop("ignored", None)
+        data.pop("path", None)
+        cfg: AppConfig = _merge(cls(), data)
+        cfg.ignored = ignored
+        cfg.validate()
+        return cfg
+
+    @classmethod
+    def load(cls, path: str | Path | None) -> AppConfig:
+        """Configuration from a JSON file (defaults if it does not exist); the file is kept for ``persist``."""
+        if path is None or not Path(path).exists():
+            cfg = cls()
+        else:
+            try:
+                data = json.loads(Path(path).read_text(encoding="utf-8"))
+            except json.JSONDecodeError as e:
+                raise ConfigError(f"{path}: not valid JSON (line {e.lineno}, column {e.colno}): {e.msg}") from None
+            cfg = cls.from_dict(data)
+        cfg.path = str(path) if path is not None else ""
+        return cfg
+
+    def validate(self) -> None:
+        """Clear error messages for typical mistakes instead of strange behaviour later."""
+        from .methods import METHODS
+        from .representations import REPRESENTATIONS
+
+        errors: list[str] = []
+
+        def one_of(path: str, value: object, allowed: tuple[object, ...]) -> None:
+            if value not in allowed:
+                errors.append(f"{path} = {value!r} – allowed: {', '.join(map(str, allowed))}")
+
+        def at_least(path: str, value: object, minimum: float) -> None:
+            if not isinstance(value, (int, float)) or value < minimum:
+                errors.append(f"{path} = {value!r} – must be a number ≥ {minimum}")
+
+        src = self.camera.source
+        if not (src in ("sim", "pi") or src.startswith(("usb:", "folder:"))):
+            errors.append(f"camera.source = {src!r} – allowed: sim, pi, usb:<n>, folder:<path>")
+        at_least("camera.width", self.camera.width, 160)
+        at_least("camera.height", self.camera.height, 120)
+        at_least("camera.fps", self.camera.fps, 1)
+        at_least("camera.exposure_us", self.camera.exposure_us, 0)
+        if self.camera.sensor_mode is not None and len(self.camera.sensor_mode) != 2:
+            errors.append("camera.sensor_mode – must be [width, height], e.g. [1640, 1232]")
+        at_least("localization.work_width", self.localization.work_width, 160)
+        one_of("localization.rotation_search", self.localization.rotation_search, ("full", "flip", "off"))
+        one_of("localization.ecc_datum", self.localization.ecc_datum, ("auto", "outline", "all"))
+        one_of("trigger.axis", self.trigger.axis, ("x", "y"))
+        one_of("trigger.mode", self.trigger.mode, ("pass", "still"))
+        at_least("trigger.still_frames", self.trigger.still_frames, 2)
+        for m in self.method.methods:
+            one_of("method.methods[]", m, tuple(METHODS))
+        one_of("method.diff_representation", self.method.diff_representation, tuple(REPRESENTATIONS))
+        one_of("method.pca_representation", self.method.pca_representation, tuple(REPRESENTATIONS))
+        one_of("method.decision", self.method.decision, ("fusion", "or"))
+        at_least("method.screen_k", self.method.screen_k, 2.0)
+        if not 0 < self.method.screen_max_ratio <= 0.5:
+            errors.append(f"method.screen_max_ratio = {self.method.screen_max_ratio!r} – must be > 0 and ≤ 0.5")
+        at_least("inspection.shots_per_part", self.inspection.shots_per_part, 3)
+        at_least("target_reference_count", self.target_reference_count, 3)
+        at_least("learning.update_after", self.learning.update_after, 0)
+        at_least("autosetup.max_zoom", self.autosetup.max_zoom, 1.0)
+        if errors:
+            raise ConfigError("Configuration error(s):\n  - " + "\n  - ".join(errors))
+
+
+class ConfigError(ValueError):
+    """Invalid configuration – the message names the setting and the allowed values."""
+
+    pass
+
+
+# Sections of the full version that the core version no longer has. An existing config.json
+# with these sections still loads; the sections are ignored and reported once at start-up.
+REMOVED_SECTIONS = ("lighting", "self_learning", "io", "calibration")
+
+
+def _merge(obj: Any, data: dict[str, Any], strict: bool = True) -> Any:
+    """Recursively overwrite the fields of a dataclass with values from ``data``.
+    Unknown keys (typos) are reported instead of being silently ignored (``strict=False``:
+    skipped – used for settings stored inside older models)."""
+    known = {f.name for f in fields(obj)}
+    unknown = sorted(k for k in data if k not in known)
+    if unknown and strict:
+        raise ConfigError(
+            f"Unknown setting(s) in {type(obj).__name__}: {', '.join(unknown)} – known: {', '.join(sorted(known))}"
+        )
+    for f in fields(obj):
+        if f.name not in data:
+            continue
+        current = getattr(obj, f.name)
+        value = data[f.name]
+        if is_dataclass(current) and isinstance(value, dict):
+            _merge(current, value, strict)
+        elif isinstance(current, tuple) and isinstance(value, list):
+            setattr(obj, f.name, tuple(value))
+        else:
+            setattr(obj, f.name, value)
+    return obj

@@ -1,7 +1,17 @@
-"""Conveyor trigger: fires exactly one capture per part."""
+"""Conveyor trigger: fires exactly one capture per part.
+
+Two modes (``trigger.mode``):
+
+* ``pass``  – continuous belt: capture when the part crosses the image centre, or when it rests
+  inside the centre band.
+* ``still`` – stop-and-go belt: capture only once the part has rested inside the centre band for
+  ``still_frames`` frames, so the image is never taken while the part moves or brakes. A part that
+  leaves the band without stopping is still captured (in motion) and counted in ``moving_captures``.
+"""
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import replace
 
 import cv2
@@ -9,6 +19,8 @@ import numpy as np
 
 from .alignment import PartDetection, detect_part, resize_to_width, to_gray
 from .config import LocalizationConfig, TriggerConfig
+
+STILL_TOLERANCE = 0.004  # "still": centroid movement over still_frames frames (fraction of the image size)
 
 
 class PartTrigger:
@@ -23,8 +35,11 @@ class PartTrigger:
         self.misses = 0
         self.last_det: PartDetection | None = None
         self.scale = 1.0
+        self.track: deque[float] = deque(maxlen=max(2, cfg.still_frames))  # positions in the centre band
+        self.moving_captures = 0  # "still": parts that did not stop and were captured in motion
 
     def update(self, frame: np.ndarray) -> bool:
+        """Next frame; True if the picture of a part should be taken now."""
         small = resize_to_width(frame, self.cfg.detect_width)
         self.scale = frame.shape[1] / small.shape[1]
         det = detect_part(to_gray(small), self.loc)
@@ -36,25 +51,40 @@ class PartTrigger:
         fire = False
         if det is not None and pos is not None and abs(pos) < self.cfg.center_band_ratio and det.complete:
             self.misses = 0
-            prev = self.prev_pos
-            if self.armed and prev is not None:
-                crossed = np.sign(pos) != np.sign(prev) or abs(pos) < 0.01
-                still = abs(pos - prev) < 0.002
-                if crossed or still:
-                    fire = True
-                    self.armed = False
+            self.track.append(pos)
+            if self.armed:
+                fire = self._still() if self.cfg.mode == "still" else self._crossed_or_still(pos)
         else:
+            if self.cfg.mode == "still" and self.armed and self.track and det is not None and det.complete:
+                fire = True  # left the centre band without stopping – capture it anyway, in motion
+                self.moving_captures += 1
+            self.track.clear()
             self.misses += 1
             if self.misses >= self.cfg.rearm_frames:
                 self.armed = True
+        if fire:
+            self.armed = False
         self.prev_pos = pos
         return fire
 
+    def _crossed_or_still(self, pos: float) -> bool:
+        prev = self.prev_pos
+        if prev is None:
+            return False
+        return bool(np.sign(pos) != np.sign(prev) or abs(pos) < 0.01 or abs(pos - prev) < 0.002)
+
+    def _still(self) -> bool:
+        if self.track.maxlen != self.cfg.still_frames:  # setting changed at run time
+            self.track = deque(self.track, maxlen=max(2, self.cfg.still_frames))
+        return len(self.track) == self.track.maxlen and max(self.track) - min(self.track) < STILL_TOLERANCE
+
     @property
     def part_complete(self) -> bool:
+        """Is the last detected part completely in the image?"""
         return self.last_det is not None and self.last_det.complete
 
     def draw(self, img: np.ndarray) -> None:
+        """Draws the centre band and the detected part into the live image."""
         h, w = img.shape[:2]
         b = self.cfg.center_band_ratio
         color = (0, 200, 255) if self.armed else (120, 120, 120)

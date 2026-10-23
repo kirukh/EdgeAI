@@ -7,6 +7,7 @@ All parameters live in dataclasses and can be overridden via a JSON file
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,8 @@ from typing import Any
 
 @dataclass
 class CameraConfig:
+    """Camera source, resolution, exposure and white balance (plus the simulator settings)."""
+
     # "sim", "pi", "usb:0", "folder:/path/to/images"
     source: str = "sim"
     width: int = 1280
@@ -48,13 +51,19 @@ class CameraConfig:
     sim_defocus: float = 0.0  # simulated lens blur (Gaussian sigma in px)
     sim_part_scale: float = 1.0  # < 1 = camera mounted higher (parts appear smaller)
     sim_autofocus: bool = False  # simulate a camera with focus motor (Camera Module 3)
+    sim_stop_frames: int = 0  # stop-and-go belt: each part rests this many frames in the image centre
 
 
 @dataclass
 class LocalizationConfig:
+    """Finding the part and bringing it into the normalised pose."""
+
     # "auto" detects whether the part is brighter or darker than the background
     polarity: str = "auto"  # "auto" | "bright" | "dark"
     min_part_area_ratio: float = 0.02  # minimum part area relative to the image
+    # An object inside the image counts as a part only if it differs this much (grey levels) from its
+    # surroundings – patches of belt texture or noise on an empty belt do not
+    min_part_contrast: float = 25.0
     border_margin_px: int = 4  # part must not touch the image border
     canvas_margin_ratio: float = 0.12  # margin around the aligned part
     use_ecc_refine: bool = True  # sub-pixel fine alignment via ECC
@@ -73,16 +82,25 @@ class LocalizationConfig:
 
 @dataclass
 class TriggerConfig:
+    """Conveyor trigger: when the picture of a part is taken."""
+
     # Capture as soon as the part is fully visible and inside the centre band
     center_band_ratio: float = 0.12
     # Conveyor direction: "x" (left↔right) or "y" (top↔bottom)
     axis: str = "x"
+    # "pass": capture when the part crosses the image centre (also while it moves);
+    # "still": stop-and-go belt – capture only once the part rests in the centre band (sharp image).
+    # A part that does not stop is still captured when it leaves the band (and counted).
+    mode: str = "pass"
+    still_frames: int = 3  # "still": frames without movement before the capture
     detect_width: int = 320  # resolution for the fast part detection
     rearm_frames: int = 3  # frames without a centred part before re-arming
 
 
 @dataclass
 class MethodConfig:
+    """Inspection methods, their image representations and the decision rule."""
+
     # Enabled inspection methods (combined with OR → one method NOK = part NOK)
     methods: list[str] = field(default_factory=lambda: ["geometry", "diff", "pca"])
     # Image representation per method (see qc/representations.py)
@@ -135,6 +153,8 @@ class MethodConfig:
 
 @dataclass
 class StorageConfig:
+    """Where models, results and archives are stored, and which images are kept."""
+
     models_dir: str = "data/models"
     results_dir: str = "data/results"
     archive_dir: str = "data/archive"  # ZIP archives of finished batches
@@ -145,6 +165,8 @@ class StorageConfig:
 
 @dataclass
 class InspectionConfig:
+    """Several images per part and the majority vote."""
+
     # Always several images of the same part while it passes the camera, majority vote – random
     # false alarms (dust, a reflection, sensor noise) disappear. Fixed, minimum 3 (5 is possible).
     # To save time, the 2nd/3rd image is only evaluated when the 1st is not CLEARLY good.
@@ -155,6 +177,8 @@ class InspectionConfig:
 
 @dataclass
 class LearningConfig:
+    """Continuous improvement from the operator's decisions."""
+
     # Continuous improvement (qc/learning.py): the operator accepts NOK parts that are within the
     # company's tolerance ("Result wrong?"); the model learns these deviations as acceptable.
     enabled: bool = True
@@ -167,6 +191,8 @@ class LearningConfig:
 
 @dataclass
 class DriftConfig:
+    """Image-quality drift monitor."""
+
     window: int = 20  # parts in the rolling window
     contrast_tol: float = 0.15  # ±15 % contrast part ↔ belt (lighting ageing, exposure)
     background_tol: float = 20.0  # grey levels (ambient light, dirty belt/backlight)
@@ -176,6 +202,8 @@ class DriftConfig:
 
 @dataclass
 class AutoSetupConfig:
+    """Automatic camera setup."""
+
     # Automatic camera setup when a part type is taught in (see qc/autosetup.py)
     enabled: bool = True
     target_level: float = 225.0  # 99.5th percentile of part + surroundings after the setup
@@ -191,6 +219,8 @@ class AutoSetupConfig:
 
 @dataclass
 class UIConfig:
+    """Web UI: setup PIN, preview rate and quality."""
+
     # PIN for the setup area (sensitivity, models, focus assistant, archives, simulator).
     # The supervisor screen needs no PIN. "" = setup area without PIN. CHANGE THE DEFAULT.
     setup_pin: str = "1234"
@@ -201,6 +231,8 @@ class UIConfig:
 
 @dataclass
 class AppConfig:
+    """Complete configuration (``config.json``); unknown keys and invalid values are reported, not ignored."""
+
     camera: CameraConfig = field(default_factory=CameraConfig)
     localization: LocalizationConfig = field(default_factory=LocalizationConfig)
     trigger: TriggerConfig = field(default_factory=TriggerConfig)
@@ -214,44 +246,66 @@ class AppConfig:
     target_reference_count: int = 15
     # Sections of older versions that were found in the file and ignored (logged at start-up)
     ignored: list[str] = field(default_factory=list, repr=False)
+    # File the configuration was loaded from – settings changed in the UI are written back there
+    path: str = field(default="", repr=False)
 
     def to_dict(self) -> dict[str, Any]:
+        """Configuration as a plain dict (without the internal fields)."""
         d = asdict(self)
         d.pop("ignored")
+        d.pop("path")
         return d
+
+    def persist(self, section: str, key: str, value: Any) -> bool:
+        """Writes one setting into the config file (all other entries are kept). False without a file."""
+        if not self.path:
+            return False
+        p = Path(self.path)
+        data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+        data.setdefault(section, {})[key] = value
+        tmp = p.with_name(p.name + ".tmp")
+        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        os.replace(tmp, p)
+        return True
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AppConfig:
+        """Configuration from a dict (sections of version 1 are dropped and listed in ``ignored``), validated."""
         data = dict(data)
         ignored = sorted(k for k in REMOVED_SECTIONS if data.pop(k, None) is not None)
         data.pop("ignored", None)
-        cfg = _merge(cls(), data)
+        data.pop("path", None)
+        cfg: AppConfig = _merge(cls(), data)
         cfg.ignored = ignored
         cfg.validate()
         return cfg
 
     @classmethod
     def load(cls, path: str | Path | None) -> AppConfig:
+        """Configuration from a JSON file (defaults if it does not exist); the file is kept for ``persist``."""
         if path is None or not Path(path).exists():
-            return cls()
-        try:
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
-        except json.JSONDecodeError as e:
-            raise ConfigError(f"{path}: not valid JSON (line {e.lineno}, column {e.colno}): {e.msg}") from None
-        return cls.from_dict(data)
+            cfg = cls()
+        else:
+            try:
+                data = json.loads(Path(path).read_text(encoding="utf-8"))
+            except json.JSONDecodeError as e:
+                raise ConfigError(f"{path}: not valid JSON (line {e.lineno}, column {e.colno}): {e.msg}") from None
+            cfg = cls.from_dict(data)
+        cfg.path = str(path) if path is not None else ""
+        return cfg
 
     def validate(self) -> None:
         """Clear error messages for typical mistakes instead of strange behaviour later."""
         from .methods import METHODS
         from .representations import REPRESENTATIONS
 
-        errors = []
+        errors: list[str] = []
 
-        def one_of(path, value, allowed):
+        def one_of(path: str, value: object, allowed: tuple[object, ...]) -> None:
             if value not in allowed:
                 errors.append(f"{path} = {value!r} – allowed: {', '.join(map(str, allowed))}")
 
-        def at_least(path, value, minimum):
+        def at_least(path: str, value: object, minimum: float) -> None:
             if not isinstance(value, (int, float)) or value < minimum:
                 errors.append(f"{path} = {value!r} – must be a number ≥ {minimum}")
 
@@ -268,6 +322,8 @@ class AppConfig:
         one_of("localization.rotation_search", self.localization.rotation_search, ("full", "flip", "off"))
         one_of("localization.ecc_datum", self.localization.ecc_datum, ("auto", "outline", "all"))
         one_of("trigger.axis", self.trigger.axis, ("x", "y"))
+        one_of("trigger.mode", self.trigger.mode, ("pass", "still"))
+        at_least("trigger.still_frames", self.trigger.still_frames, 2)
         for m in self.method.methods:
             one_of("method.methods[]", m, tuple(METHODS))
         one_of("method.diff_representation", self.method.diff_representation, tuple(REPRESENTATIONS))
@@ -285,6 +341,8 @@ class AppConfig:
 
 
 class ConfigError(ValueError):
+    """Invalid configuration – the message names the setting and the allowed values."""
+
     pass
 
 

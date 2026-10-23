@@ -50,31 +50,37 @@ PREVIOUS = "previous"  # the version before the last update (one-step undo)
 
 
 class TrainingError(RuntimeError):
+    """Training not possible (too few usable references, unsupported model) – the message is shown to the user."""
+
     pass
 
 
 @dataclass
 class InspectionResult:
+    """Inspection result of one image (or the majority vote of several) with defects, scores and marked images."""
+
     status: str  # "OK" | "NOK" | "NO_PART"
     model: str
     timestamp: str
     time_ms: float
-    defects: list[M.Defect] = field(default_factory=list)
-    method_results: list[M.MethodResult] = field(default_factory=list)
+    defects: list[M.Defect] = field(default_factory=list[Any])
+    method_results: list[M.MethodResult] = field(default_factory=list[Any])
     overlay: np.ndarray | None = None  # working image with markings
     detail: np.ndarray | None = None  # aligned part with heatmap
     image_id: str = ""
     model_version: int = 1
     ground_truth: str | None = None  # simulator/image folder only
-    measurements: dict = field(default_factory=dict)  # image quality (drift monitor)
-    shots: list[str] = field(default_factory=list)  # status of each shot (majority vote)
+    measurements: dict[str, Any] = field(default_factory=dict[str, Any])  # image quality (drift monitor)
+    shots: list[str] = field(default_factory=list[Any])  # status of each shot (majority vote)
     worst: float = 0.0  # highest decisive score (picks the representative shot)
 
     @property
     def ok(self) -> bool:
+        """True if the part is OK."""
         return self.status == "OK"
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
+        """Result as a plain dict (history, log, UI) – without the images."""
         return {
             "status": self.status,
             "model": self.model,
@@ -91,6 +97,7 @@ class InspectionResult:
 
 
 def standalone_levels(cfg: MethodConfig) -> dict[str, float]:
+    """Score above which a method decides NOK on its own (fusion rule)."""
     return {"geometry": cfg.geometry_standalone, "diff": cfg.diff_standalone, "pca": cfg.pca_standalone}
 
 
@@ -146,6 +153,7 @@ def measure(a: AlignedPart) -> dict[str, float]:
 
 
 def slugify(name: str) -> str:
+    """File-system safe name of a part type (folder name of the model)."""
     s = re.sub(r"[^A-Za-z0-9_\-]+", "_", name.strip()).strip("_")
     return s or "model"
 
@@ -207,7 +215,7 @@ def _training_report(
     accepted: set[int],
     mm_per_px: float | None,
     seconds: float,
-) -> dict:
+) -> dict[str, Any]:
     """Training report. All reference indices are indices into the taught-in frames (image number − 1)."""
     model = fit.model
     report: dict[str, Any] = {
@@ -236,12 +244,16 @@ def _training_report(
 
 @dataclass
 class ChannelAnalysis:
+    """Aligned part and the results of all methods for one image (before the decision)."""
+
     aligned: AlignedPart
     results: list[M.MethodResult]
     measurements: dict[str, float]
 
 
 class QCModel:
+    """A taught part type: alignment reference, inspection methods, sensitivity, camera profile, versions."""
+
     def __init__(self, name: str, loc_cfg: LocalizationConfig, method_cfg: MethodConfig):
         self.name = name
         self.loc_cfg = loc_cfg
@@ -252,14 +264,14 @@ class QCModel:
         self.created = datetime.now().isoformat(timespec="seconds")
         self.n_samples = 0
         self.polarity = "auto"
-        self.report: dict = {}
+        self.report: dict[str, Any] = {}
         self.path: Path | None = None
         self.mm_per_px: float | None = None  # scale at training time (incl. zoom)
         self.baseline: dict[str, float] = {}  # drift monitoring: measurements of the references
-        self.sensitivity: dict[str, float] = dict.fromkeys(METHOD_NAMES, 1.0)
+        self.sensitivity: dict[str, float] = dict[str, Any].fromkeys(METHOD_NAMES, 1.0)
         # Camera settings found by the automatic camera setup (exposure, gain, white balance,
         # focus, zoom/crop, belt axis) – applied when the model is selected.
-        self.camera_profile: dict | None = None
+        self.camera_profile: dict[str, Any] | None = None
         self._ref_frames: list[np.ndarray] | None = None
         self._refs_dir: Path | None = None
         self._legacy = False  # loaded from the full version's folder layout
@@ -267,10 +279,11 @@ class QCModel:
         # model version and the history of updates
         self.accepted: list[int] = []
         self.version = 1
-        self.history: list[dict] = []
+        self.history: list[dict[str, Any]] = []
 
     @property
     def slug(self) -> str:
+        """Folder name of the model."""
         return self.path.name if self.path else slugify(self.name)
 
     # ------------------------------------------------------------------ learning
@@ -367,6 +380,7 @@ class QCModel:
 
     # ------------------------------------------------------------------ inspection
     def align(self, frame: np.ndarray) -> AlignedPart | None:
+        """Finds the part in a frame and aligns it to the reference (None if no complete part is visible)."""
         work, det = _prepare(frame, self.loc_cfg)
         if det is None or not det.complete:
             return None
@@ -418,6 +432,10 @@ class QCModel:
         for k, v in values.items():
             if k in METHOD_NAMES:
                 self.sensitivity[k] = float(min(3.0, max(0.25, float(v))))
+        self.save_meta()
+
+    def save_meta(self) -> None:
+        """Writes the settings (sensitivity, camera profile …) of a saved model."""
         if self.path is None:
             return
         if self._legacy:
@@ -438,7 +456,7 @@ class QCModel:
         tmp = path.with_name(path.name + ".tmp")
         shutil.rmtree(tmp, ignore_errors=True)
         (tmp / "refs").mkdir(parents=True)
-        arrays = {"ref_norm": self.ref_norm}
+        arrays: dict[str, Any] = {"ref_norm": self.ref_norm}
         for k, m in self.methods.items():
             _, arr = m.state()
             arrays.update({f"{k}__{a}": v for a, v in arr.items()})
@@ -490,8 +508,9 @@ class QCModel:
 
     @classmethod
     def load(cls, path: str | Path) -> QCModel:
+        """Loads a saved model (also models of version 1 and 2.0)."""
         path = Path(path)
-        extra: dict = {}
+        extra: dict[str, Any] = {}
         if (path / "recipe.json").exists():  # saved by the full version (format 3)
             extra = json.loads((path / "recipe.json").read_text(encoding="utf-8"))
             if extra.get("channels") != ["main"]:
@@ -529,11 +548,13 @@ class QCModel:
         return model
 
     def reference_frames(self) -> list[np.ndarray]:
+        """The reference images the model was trained with."""
         if self._ref_frames is not None:
             return list(self._ref_frames)
         if self._refs_dir is None or not self._refs_dir.exists():
             return []
-        return [cv2.imread(str(p)) for p in sorted(self._refs_dir.glob("*.png"))]
+        images = (cv2.imread(str(p)) for p in sorted(self._refs_dir.glob("*.png")))
+        return [img for img in images if img is not None]
 
     # ------------------------------------------------------------------ info
     def warnings(self) -> list[str]:
@@ -578,7 +599,8 @@ class QCModel:
             out.append(f"Inconsistent hole count in reference(s) {numbers(geo['inconsistent_references'])}.")
         return out
 
-    def summary(self) -> dict:
+    def summary(self) -> dict[str, Any]:
+        """Short description for the UI (name, references, methods, sensitivity, version)."""
         return {
             "name": self.name,
             "slug": self.slug,
@@ -599,6 +621,7 @@ class QCModel:
 
 
 def has_previous(path: Path) -> bool:
+    """Has the model a previous version (undo of the last update possible)?"""
     return (path / PREVIOUS / "meta.json").exists()
 
 
@@ -629,7 +652,8 @@ def model_path(models_dir: str | Path, slug: str) -> Path | None:
     return p
 
 
-def list_models(models_dir: str | Path) -> list[dict]:
+def list_models(models_dir: str | Path) -> list[dict[str, Any]]:
+    """Summaries of all models in ``models_dir`` (unreadable folders are skipped)."""
     out = []
     for p in sorted(Path(models_dir).glob("*")):
         if p.suffix in (".tmp", ".old", ".swap") or model_path(models_dir, p.name) is None:

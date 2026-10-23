@@ -49,7 +49,8 @@ The simulator generates a conveyor with synthetic plates. On the operator screen
 ```
 Camera image
   → Trigger: part completely visible and in the image centre?          (trigger.py)
-  → Localisation: Otsu threshold, largest contour, minAreaRect         (alignment.py)
+  → Localisation: Otsu threshold, largest object completely in the image (rails and belt edges that run out
+    of the image are ignored), minAreaRect                              (alignment.py)
   → Alignment: centroid onto a fixed canvas, 360° rotation search against
     the reference (decided by the hole pattern), ECC fine alignment (sub-pixel)
   → Photometric normalisation: background = 0, part = 1
@@ -83,6 +84,11 @@ findings need a second method to agree. `"method": {"decision": "or"}` makes eve
 
 **Sensitivity per method** (setup area → Models): ×0.5 … ×2 per method and model (> 1 = stricter). It takes effect
 immediately and is stored with the model.
+
+**Capture mode** (setup area → *Setup* → *Camera & focus*, `"trigger": {"mode": …}`): `pass` takes the picture as
+the part crosses the image centre (continuous belt); `still` waits until the part rests between the two lines for
+3 frames (stop-and-go belt) – the image is never taken while the part moves or brakes. A part that does not stop is
+still photographed as it leaves the lines, and the operator screen shows a notice.
 
 **Multi-shot majority vote** (always on): 3 images while the part passes; random false alarms (dust, a reflection)
 are outvoted. If the 1st image is clearly good (every method below 50 % of its threshold) it is final, so a clearly
@@ -214,6 +220,9 @@ and lets the parts run.
 | 3 · The other good parts run | Teach-in as usual; the sharpness of every reference is measured. |
 | Afterwards | All settings are stored **with the model** and applied whenever this part type is selected. |
 
+**Camera turned by 90°** (belt runs top ↕ bottom in the image): setup area → *Setup* → *Camera & focus* →
+*Belt direction* – the trigger lines turn with it; saved in `config.json` (`"trigger": {"axis": "y"}`).
+
 Stays manual: the lens of a camera **without** focus motor (Camera Module v2, HQ) – focus it once with the **focus
 assistant** (setup area → *Setup* → *Camera & focus*); camera mount and lighting. Settings: `config.json →
 "autosetup"`.
@@ -331,12 +340,14 @@ data/logs/qc.log        log file
 ```
 main.py                    entry point (python main.py …) – the commands are in qc/cli.py
 pyproject.toml             dependencies and tool settings (pytest, coverage, ruff, mypy)
+.github/workflows/ci.yml   CI: format, lint, types and tests on every push to main and every pull request
 qc/config.py               all parameters (dataclasses, overridable via config.json, validated)
 qc/camera.py               Pi camera, USB, image folder, simulator
 qc/trigger.py              conveyor trigger (one capture per part)
 qc/alignment.py            localisation, alignment, photometric normalisation
 qc/representations.py      image representations (gray, CLAHE, edges, threshold, LAB, HSV …)
-qc/methods.py              inspection methods geometry / diff / pca, reference screening per method
+qc/methods/                inspection methods with reference screening: base.py (results, interface), geometry.py,
+                           diff.py, pca.py
 qc/model.py                part type: training (with screening), inspection, fusion decision, save/load
 qc/inspection.py           several images per part, majority vote
 qc/visualize.py            defect marking, heatmap
@@ -344,15 +355,17 @@ qc/teach.py                teach-in session (reference images)
 qc/camera_setup.py         camera profiles, automatic camera setup, focus assistant
 qc/autosetup.py            calculations of the automatic camera setup (exposure, zoom, sharpness, belt path)
 qc/results.py              history, counters, supervisor feedback, CSV logs
-qc/learning.py             continuous improvement: accepted parts, model updates with release check
+qc/learning.py             continuous improvement: accepted parts, model update with release check
+qc/improvement.py          continuous improvement in operation: operator decisions → background update, undo
 qc/drift.py                image-quality drift monitor
 qc/archive.py              ZIP + summary of finished batches
+qc/model_store.py          model folders on disk: find, load, list, save, delete
 qc/system.py               coordination: threads, operating mode, components above
 qc/web/                    web UI: operator_api.py and setup_api.py (Flask blueprints), auth.py, static/
 qc/synthetic.py            synthetic parts with defects (simulator, tests)
 qc/evaluate.py             comparison of method × representation × lighting
 deploy/                    install.sh (installation + autostart), run.sh
-tests/                     pytest – 72 tests, incl. complete web workflows with the simulator and a
+tests/                     pytest – 83 tests, incl. complete web workflows with the simulator and a
                            stand-in for picamera2 to test the Pi camera code
 ```
 
@@ -362,15 +375,18 @@ tests/                     pytest – 72 tests, incl. complete web workflows wit
 |---|---|---|---|
 | PEP 8 formatting | ruff format (Black style, 120 characters) | `ruff format qc tests main.py` | ✓ all files |
 | PEP 8 + bug patterns, import order, naming, complexity ≤ 15 | ruff (pycodestyle, pyflakes, bugbear, mccabe …) | `ruff check qc tests main.py` | ✓ 0 findings |
-| PEP 484 type hints | mypy | `mypy` | ✓ 0 errors |
-| PEP 257 docstrings | – | – | modules and public functions |
+| PEP 484 type hints | mypy, strict mode (every function annotated, no implicit `Any`) | `mypy` | ✓ 0 errors |
+| PEP 257 docstrings | ruff (D1) | `ruff check qc tests main.py` | ✓ every module, class and public function/method |
 | PEP 621 project metadata | pyproject.toml | `pip install -e ".[dev]"` | ✓ |
-| Tests + coverage | pytest, pytest-cov | `pytest --cov` | ✓ 72 tests, 91 % |
+| Tests + coverage | pytest, pytest-cov, pytest-xdist (parallel) | `pytest --cov` | ✓ 83 tests, 94 %, ~45 s |
+| Continuous integration | GitHub Actions, Python 3.11 + 3.13 | `.github/workflows/ci.yml` | all rows above on every pull request |
 
 All rules are configured in `pyproject.toml`; the exceptions are commented there (e.g. upper-case `H, W, K` for
 matrices in image processing, and `int(round(x))`, which is needed with NumPy 1.x on Raspberry Pi OS Bookworm).
+The tests run in parallel (one process per CPU core); `pytest -n 0` runs them one after another, e.g. for debugging.
 
 Design principles: **one responsibility per module** (the former 700-line `QCSystem` with three mixins is now a
-coordinator plus small components), **composition instead of mixins**, **pure functions where possible**
+coordinator plus small components: `CameraSetup`, `ModelStore`, `ModelImprovement`, …; the three inspection methods
+have one module each), **composition instead of mixins**, **pure functions where possible**
 (`vote`, `decide`, `autosetup`) because they are easy to test, and **KISS/YAGNI** – features that the task does not
 need were removed instead of being kept "just in case".
