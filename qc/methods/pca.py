@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
+from typing import Any
+
 import cv2
 import numpy as np
 
@@ -22,14 +25,14 @@ from .base import (
 class PCAMethod(Method):
     name = "pca"
 
-    def _vec(self, s: AlignedPart):
+    def _vec(self, s: AlignedPart) -> tuple[np.ndarray, tuple[int, int]]:
         r = reps.compute(s, self.cfg.pca_representation)
         h, w = r.shape
         size = (self.cfg.pca_size, max(8, int(round(self.cfg.pca_size * h / w))))
         return cv2.resize(r, size, interpolation=cv2.INTER_AREA), size
 
     @staticmethod
-    def _basis(data: np.ndarray, variance: float):
+    def _basis(data: np.ndarray, variance: float) -> tuple[np.ndarray, np.ndarray]:
         mean = data.mean(0)
         centred = data - mean
         if len(data) < 2:
@@ -42,18 +45,19 @@ class PCAMethod(Method):
         k = min(k, max(1, len(data) - 2))
         return mean, vt[:k].astype(np.float32)
 
-    def _residual(self, v, mean, comps, size):
+    def _residual(self, v: np.ndarray, mean: np.ndarray, comps: np.ndarray, size: tuple[int, int]) -> np.ndarray:
         c = v - mean
         r = c - (c @ comps.T) @ comps if len(comps) else c
         rmap = np.abs(r.reshape(size[1], size[0]))
-        return cv2.GaussianBlur(rmap, (3, 3), 0)
+        out: np.ndarray = cv2.GaussianBlur(rmap, (3, 3), 0)
+        return out
 
     accept_res: np.ndarray | None = None  # local tolerance from parts the operator accepted
 
     def _effective(self, rmap: np.ndarray) -> np.ndarray:
         return rmap if self.accept_res is None else np.maximum(rmap - self.accept_res, 0)
 
-    def fit(self, samples, accepted=()):
+    def fit(self, samples: list[AlignedPart], accepted: Collection[int] = ()) -> None:
         normal, acc = split_accepted(len(samples), accepted)
         vecs = [self._vec(s) for s in samples]
         self.size = vecs[0][1]
@@ -86,7 +90,7 @@ class PCAMethod(Method):
             "threshold": round(self.threshold, 4),
         }
 
-    def score(self, s, sens=1.0, mm_per_px=None):
+    def score(self, s: AlignedPart, sens: float = 1.0, mm_per_px: float | None = None) -> MethodResult:
         v, _ = self._vec(s)
         rmap = self._effective(self._residual(v.ravel().astype(np.float32), self.mean, self.comps, self.size))
         thr = self.threshold / max(float(sens), 1e-3)
@@ -102,8 +106,8 @@ class PCAMethod(Method):
                         "ANOMALY",
                         self.name,
                         bbox,
-                        f"residual {float(big[m].max()):.3f} (threshold {thr:.3f})",
-                        float(big[m].max()) / thr,
+                        f"residual {float(np.max(big[m])):.3f} (threshold {thr:.3f})",
+                        float(np.max(big[m])) / thr,
                     )
                 )
             if not defects:
@@ -111,14 +115,14 @@ class PCAMethod(Method):
         heat = np.clip(big / (2 * thr), 0, 1).astype(np.float32)
         return MethodResult(self.name, bool(score < 1.0), float(score), defects, heat)
 
-    def state(self):
+    def state(self) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
         return (
             {"threshold": self.threshold, "size": list(self.size), "report": self.report},
             {"mean": self.mean, "comps": self.comps}
             | ({"accept_res": self.accept_res} if self.accept_res is not None else {}),
         )
 
-    def load_state(self, meta, arrays):
+    def load_state(self, meta: dict[str, Any], arrays: dict[str, np.ndarray]) -> None:
         self.threshold = meta["threshold"]
         self.size = tuple(meta["size"])
         self.report = meta.get("report", {})

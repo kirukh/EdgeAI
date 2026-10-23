@@ -13,13 +13,16 @@ from __future__ import annotations
 
 import copy
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
 
 # Dimensions in pixels relative to a 640 px wide image
-PART_TYPES: dict[str, dict] = {
+PART_TYPES: dict[str, dict[str, Any]] = {
     "A": {  # metal plate with two holes
         "size": (300, 170),
         "holes": [
@@ -54,7 +57,7 @@ PART_TYPES: dict[str, dict] = {
 }
 
 
-def outline_of(spec: dict) -> np.ndarray:
+def outline_of(spec: dict[str, Any]) -> np.ndarray:
     """Outline polygon of a part type in local coordinates (centre = 0,0)."""
     if "outline" in spec:
         return np.array(spec["outline"], np.float64)
@@ -62,14 +65,19 @@ def outline_of(spec: dict) -> np.ndarray:
     return np.array([[-pw / 2, -ph / 2], [pw / 2, -ph / 2], [pw / 2, ph / 2], [-pw / 2, ph / 2]], np.float64)
 
 
-def _random_inside(rng, poly: np.ndarray, margin: float, extra_ok=lambda x, y: True):
+def _random_inside(
+    rng: np.random.Generator,
+    poly: np.ndarray,
+    margin: float,
+    extra_ok: Callable[[float, float], bool] = lambda _x, _y: True,
+) -> tuple[float, float]:
     """Random point inside the polygon with at least ``margin`` px distance to the edge."""
     cnt = poly.astype(np.float32).reshape(-1, 1, 2)
     (x0, y0), (x1, y1) = poly.min(0), poly.max(0)
     for _ in range(500):
         x, y = rng.uniform(x0, x1), rng.uniform(y0, y1)
         if cv2.pointPolygonTest(cnt, (float(x), float(y)), True) >= margin and extra_ok(x, y):
-            return x, y
+            return float(x), float(y)
     return float(poly[:, 0].mean()), float(poly[:, 1].mean())
 
 
@@ -91,10 +99,10 @@ DEFECT_LABELS = {
 class PartInstance:
     type_name: str
     outline: np.ndarray  # outline polygon (local coordinates)
-    holes: list[dict]  # through holes
-    blind_holes: list[dict] = field(default_factory=list)
-    scratches: list[dict] = field(default_factory=list)
-    stains: list[dict] = field(default_factory=list)
+    holes: list[dict[str, Any]]  # through holes
+    blind_holes: list[dict[str, Any]] = field(default_factory=list)
+    scratches: list[dict[str, Any]] = field(default_factory=list)
+    stains: list[dict[str, Any]] = field(default_factory=list)
     corner_cut: float = 0.0
     corner_idx: int = 0
     defect: str | None = None
@@ -157,7 +165,9 @@ def make_part(type_name: str = "A", defect: str | None = None, rng: np.random.Ge
     return part
 
 
-def _draw_hole(img, h, cx, cy, value, thickness=cv2.FILLED):
+def _draw_hole(
+    img: np.ndarray, h: dict[str, Any], cx: float, cy: float, value: float, thickness: int = cv2.FILLED
+) -> None:
     if h["shape"] == "circle":
         cv2.circle(
             img,
@@ -178,7 +188,10 @@ def _draw_hole(img, h, cx, cy, value, thickness=cv2.FILLED):
             cv2.polylines(img, [pts], True, value, thickness, cv2.LINE_AA, shift=3)
 
 
-def render_layers(part: PartInstance, lighting: str, scale: float = 1.0):
+Layers = tuple[np.ndarray, np.ndarray, tuple[float, float]]  # colour layer, alpha, centre
+
+
+def render_layers(part: PartInstance, lighting: str, scale: float = 1.0) -> Layers:
     """Renders the part in local coordinates → (colour layer, alpha, centre)."""
     poly = part.outline
     pad = 50
@@ -257,7 +270,8 @@ def belt_background(size: tuple[int, int], lighting: str, rng: np.random.Generat
     else:
         base = np.array([236, 236, 234], np.float32)
         noise = rng.normal(0, 2, (h, w)).astype(np.float32)
-    return np.clip(base[None, None, :] + noise[:, :, None], 0, 255)
+    out: np.ndarray = np.clip(base[None, None, :] + noise[:, :, None], 0, 255)
+    return out
 
 
 def compose(
@@ -266,7 +280,7 @@ def compose(
     lighting: str = "front",
     frame_size: tuple[int, int] = (640, 480),
     rng: np.random.Generator | None = None,
-    layers=None,
+    layers: Layers | None = None,
     background: np.ndarray | None = None,
     noise: np.ndarray | None = None,
 ) -> np.ndarray:
@@ -293,12 +307,13 @@ def compose(
         noise = rng.normal(0, 2.5, frame.shape).astype(np.float32)
     frame = frame * gain + noise
     frame = cv2.GaussianBlur(np.clip(frame, 0, 255), (0, 0), 0.6)
-    return frame.astype(np.uint8)
+    out: np.ndarray = frame.astype(np.uint8)
+    return out
 
 
 def random_pose(
     rng: np.random.Generator, allow_flip: bool = True, jitter: float = 30, max_angle: float = 8, any_angle: bool = False
-):
+) -> tuple[float, float, float]:
     """Random position/rotation on the belt. ``any_angle`` = parts arrive in any rotation (0–360°)."""
     if any_angle:
         ang = rng.uniform(0, 360)
@@ -308,11 +323,16 @@ def random_pose(
 
 
 def generate_dataset(
-    out_dir, part_type="A", lighting="front", n_train=15, n_test_good=20, n_per_defect=5, seed=0, any_angle=False
-):
+    out_dir: str | Path,
+    part_type: str = "A",
+    lighting: str = "front",
+    n_train: int = 15,
+    n_test_good: int = 20,
+    n_per_defect: int = 5,
+    seed: int = 0,
+    any_angle: bool = False,
+) -> Path:
     """Writes train/ (good parts only) and test/ok, test/nok/<defect> as PNG."""
-    from pathlib import Path
-
     rng = np.random.default_rng(seed)
     out = Path(out_dir)
     (out / "train").mkdir(parents=True, exist_ok=True)

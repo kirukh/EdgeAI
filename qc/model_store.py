@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import Any
 
 from .learning import KNOWN_BAD, PENDING, LearningStore
 from .model import QCModel, has_previous, list_models, model_path
@@ -39,7 +40,7 @@ class ModelStore:
     def delete(self, slug: str) -> None:
         shutil.rmtree(self.path(slug))
 
-    def list(self) -> list[dict]:
+    def list(self) -> list[dict[str, Any]]:
         """Summary of every model, with its accepted parts, test parts and whether it can be undone."""
         models = list_models(self.dir)
         for m in models:

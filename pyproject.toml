@@ -73,7 +73,5 @@ max-complexity = 15
 [tool.mypy]
 python_version = "3.11"
 files = ["qc"]
-ignore_missing_imports = true
-check_untyped_defs = true
-warn_unused_ignores = true
-warn_redundant_casts = true
+strict = true                 # all functions annotated, no implicit Any (PEP 484)
+ignore_missing_imports = true # scipy and picamera2 (Pi only) ship without type information

@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import csv
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -30,7 +32,7 @@ class EvalRow:
     config: str
     fpr: float
     recall: float
-    per_defect: dict[str, float] = field(default_factory=dict)
+    per_defect: dict[str, float] = field(default_factory=dict[str, Any])
     time_ms: float = 0.0
     note: str = ""
 
@@ -78,7 +80,7 @@ def evaluate(
     test: list[tuple[np.ndarray, str]],
     grid: list[tuple[str, MethodConfig]],
     loc: LocalizationConfig | None = None,
-    progress=print,
+    progress: Callable[[str], object] | None = print,
 ) -> list[EvalRow]:
     loc = loc or LocalizationConfig()
     labels = sorted({lbl for _, lbl in test if lbl != "ok"})
@@ -117,7 +119,7 @@ def to_markdown(rows: list[EvalRow], title: str = "") -> str:
     head = ["Configuration", "False alarms", "Detection (all)", *labels, "ms/part"]
     lines = [f"### {title}" if title else "", "", "| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
 
-    def pct(v):
+    def pct(v: float) -> str:
         return "–" if v != v else f"{v * 100:.0f} %"
 
     for r in rows:
@@ -130,7 +132,7 @@ def to_markdown(rows: list[EvalRow], title: str = "") -> str:
     return "\n".join(lines).strip() + "\n"
 
 
-def to_csv(rows: list[EvalRow], path: str | Path, extra: dict | None = None) -> None:
+def to_csv(rows: list[EvalRow], path: str | Path, extra: dict[str, Any] | None = None) -> None:
     labels = sorted({k for r in rows for k in r.per_defect})
     path = Path(path)
     new = not path.exists()
@@ -148,7 +150,16 @@ def to_csv(rows: list[EvalRow], path: str | Path, extra: dict | None = None) -> 
             )
 
 
-def synthetic_sets(part_type: str, lighting: str, n_train=15, n_good=40, n_per_defect=10, seed=0, any_angle=False):
+def synthetic_sets(
+    part_type: str,
+    lighting: str,
+    n_train: int = 15,
+    n_good: int = 40,
+    n_per_defect: int = 10,
+    seed: int = 0,
+    any_angle: bool = False,
+) -> tuple[list[np.ndarray], list[tuple[np.ndarray, str]]]:
+    """Synthetic training images (good parts) and labelled test images (``ok`` or the defect type)."""
     from . import synthetic as S
 
     rng = np.random.default_rng(seed)

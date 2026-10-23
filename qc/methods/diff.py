@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
+from typing import Any
+
 import cv2
 import numpy as np
 
@@ -29,13 +32,14 @@ class DiffMethod(Method):
 
     accept_dev: np.ndarray | None = None  # local tolerance from parts the operator accepted
 
-    def _zmap(self, x, mean, std):
+    def _zmap(self, x: np.ndarray, mean: np.ndarray, std: np.ndarray) -> np.ndarray:
         d = np.abs(x - mean)
         if self.accept_dev is not None:
             d = np.maximum(d - self.accept_dev, 0)
-        return d / std * self.region
+        z: np.ndarray = d / std * self.region
+        return z
 
-    def fit(self, samples, accepted=()):
+    def fit(self, samples: list[AlignedPart], accepted: Collection[int] = ()) -> None:
         normal, acc = split_accepted(len(samples), accepted)
         all_x = np.stack([self._rep(s) for s in samples])
         X = all_x[normal]
@@ -68,17 +72,17 @@ class DiffMethod(Method):
         }
 
     @staticmethod
-    def _clean(b):
+    def _clean(b: np.ndarray) -> np.ndarray:
         return cv2.morphologyEx(b.astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
 
-    def score(self, s, sens=1.0, mm_per_px=None):
+    def score(self, s: AlignedPart, sens: float = 1.0, mm_per_px: float | None = None) -> MethodResult:
         sens = max(float(sens), 1e-3)
         z = self._zmap(self._rep(s), self.mean, self.std)
         zt = self.cfg.diff_z_threshold / sens
         min_area = self.min_area / sens
         comps, largest = components(self._clean(z > zt), min_area)
 
-        def area_text(px):
+        def area_text(px: float) -> str:
             return f"{px * mm_per_px**2:.1f} mm²" if mm_per_px else f"{px:.0f} px"
 
         defects = [
@@ -89,14 +93,14 @@ class DiffMethod(Method):
         heat = np.clip(z / (2 * zt), 0, 1).astype(np.float32)
         return MethodResult(self.name, not defects, float(score), defects, heat)
 
-    def state(self):
+    def state(self) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
         return (
             {"min_area": self.min_area, "report": self.report},
             {"mean": self.mean, "std": self.std, "region": self.region}
             | ({"accept_dev": self.accept_dev} if self.accept_dev is not None else {}),
         )
 
-    def load_state(self, meta, arrays):
+    def load_state(self, meta: dict[str, Any], arrays: dict[str, np.ndarray]) -> None:
         self.min_area = meta["min_area"]
         self.report = meta.get("report", {})
         self.mean, self.std, self.region = arrays["mean"], arrays["std"], arrays["region"]

@@ -251,7 +251,7 @@ class AppConfig:
         ignored = sorted(k for k in REMOVED_SECTIONS if data.pop(k, None) is not None)
         data.pop("ignored", None)
         data.pop("path", None)
-        cfg = _merge(cls(), data)
+        cfg: AppConfig = _merge(cls(), data)
         cfg.ignored = ignored
         cfg.validate()
         return cfg
@@ -274,13 +274,13 @@ class AppConfig:
         from .methods import METHODS
         from .representations import REPRESENTATIONS
 
-        errors = []
+        errors: list[str] = []
 
-        def one_of(path, value, allowed):
+        def one_of(path: str, value: object, allowed: tuple[object, ...]) -> None:
             if value not in allowed:
                 errors.append(f"{path} = {value!r} – allowed: {', '.join(map(str, allowed))}")
 
-        def at_least(path, value, minimum):
+        def at_least(path: str, value: object, minimum: float) -> None:
             if not isinstance(value, (int, float)) or value < minimum:
                 errors.append(f"{path} = {value!r} – must be a number ≥ {minimum}")
 

@@ -3,8 +3,9 @@ shared by geometry, diff and pca."""
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 import cv2
 import numpy as np
@@ -44,7 +45,7 @@ class Defect:
     def label(self) -> str:
         return DEFECT_LABELS.get(self.kind, self.kind)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "kind": self.kind,
             "label": self.label,
@@ -61,13 +62,13 @@ class MethodResult:
     method: str
     ok: bool
     score: float  # ≥ 1.0 means NOK (normalised to the threshold)
-    defects: list[Defect] = field(default_factory=list)
+    defects: list[Defect] = field(default_factory=list[Any])
     heatmap: np.ndarray | None = None  # float32 [0,1] on the canvas
     channel: str = ""
     standalone: float = 1.0  # score this method needs to decide alone (fusion rule)
     decisive: bool = False  # did this method contribute to the NOK decision?
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "method": self.method,
             "label": METHOD_LABELS.get(self.method, self.method),
@@ -85,11 +86,14 @@ def bbox_from_mask(mask: np.ndarray) -> tuple[int, int, int, int]:
     return int(xs.min()), int(ys.min()), int(xs.max() - xs.min() + 1), int(ys.max() - ys.min() + 1)
 
 
-def components(binary: np.ndarray, min_area: float):
+Component = tuple[float, tuple[int, int, int, int], np.ndarray]  # area, bounding box, mask
+
+
+def components(binary: np.ndarray, min_area: float) -> tuple[list[Component], float]:
     """Connected regions ≥ min_area → (list of (area, bbox, mask), area of the largest region of any size).
     One pass for both: the score of a method is the largest region, the defects are the ones ≥ min_area."""
     n, labels, stats, _ = cv2.connectedComponentsWithStats(binary.astype(np.uint8), connectivity=8)
-    out = []
+    out: list[Component] = []
     for i in range(1, n):
         area = stats[i, cv2.CC_STAT_AREA]
         if area >= min_area:
@@ -98,7 +102,7 @@ def components(binary: np.ndarray, min_area: float):
     return out, float(np.max(stats[1:, cv2.CC_STAT_AREA])) if n > 1 else 0.0
 
 
-def robust_outliers(values, floor: float, k: float, factor: float = 1.0) -> list[int]:
+def robust_outliers(values: Sequence[float], floor: float, k: float, factor: float = 1.0) -> list[int]:
     """Indices of values that stand out clearly from the others (leave-one-out screening).
 
     Outlier = value ≥ ``floor`` (it would count as a defect at all) AND above
@@ -125,7 +129,7 @@ class Method:
 
     def __init__(self, cfg: MethodConfig):
         self.cfg = cfg
-        self.report: dict = {}
+        self.report: dict[str, Any] = {}
         # set by fit(): sample index → reasons why this reference differs clearly from the
         # other references (probably a defective part taught in by mistake)
         self.suspects: dict[int, list[str]] = {}
@@ -145,10 +149,10 @@ class Method:
         ``mm_per_px`` (from the camera calibration) switches the reported dimensions to mm."""
         raise NotImplementedError
 
-    def state(self) -> tuple[dict, dict[str, np.ndarray]]:
+    def state(self) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
         raise NotImplementedError
 
-    def load_state(self, meta: dict, arrays: dict[str, np.ndarray]) -> None:
+    def load_state(self, meta: dict[str, Any], arrays: dict[str, np.ndarray]) -> None:
         raise NotImplementedError
 
 

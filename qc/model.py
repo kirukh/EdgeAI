@@ -59,22 +59,22 @@ class InspectionResult:
     model: str
     timestamp: str
     time_ms: float
-    defects: list[M.Defect] = field(default_factory=list)
-    method_results: list[M.MethodResult] = field(default_factory=list)
+    defects: list[M.Defect] = field(default_factory=list[Any])
+    method_results: list[M.MethodResult] = field(default_factory=list[Any])
     overlay: np.ndarray | None = None  # working image with markings
     detail: np.ndarray | None = None  # aligned part with heatmap
     image_id: str = ""
     model_version: int = 1
     ground_truth: str | None = None  # simulator/image folder only
-    measurements: dict = field(default_factory=dict)  # image quality (drift monitor)
-    shots: list[str] = field(default_factory=list)  # status of each shot (majority vote)
+    measurements: dict[str, Any] = field(default_factory=dict[str, Any])  # image quality (drift monitor)
+    shots: list[str] = field(default_factory=list[Any])  # status of each shot (majority vote)
     worst: float = 0.0  # highest decisive score (picks the representative shot)
 
     @property
     def ok(self) -> bool:
         return self.status == "OK"
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "status": self.status,
             "model": self.model,
@@ -207,7 +207,7 @@ def _training_report(
     accepted: set[int],
     mm_per_px: float | None,
     seconds: float,
-) -> dict:
+) -> dict[str, Any]:
     """Training report. All reference indices are indices into the taught-in frames (image number − 1)."""
     model = fit.model
     report: dict[str, Any] = {
@@ -252,14 +252,14 @@ class QCModel:
         self.created = datetime.now().isoformat(timespec="seconds")
         self.n_samples = 0
         self.polarity = "auto"
-        self.report: dict = {}
+        self.report: dict[str, Any] = {}
         self.path: Path | None = None
         self.mm_per_px: float | None = None  # scale at training time (incl. zoom)
         self.baseline: dict[str, float] = {}  # drift monitoring: measurements of the references
-        self.sensitivity: dict[str, float] = dict.fromkeys(METHOD_NAMES, 1.0)
+        self.sensitivity: dict[str, float] = dict[str, Any].fromkeys(METHOD_NAMES, 1.0)
         # Camera settings found by the automatic camera setup (exposure, gain, white balance,
         # focus, zoom/crop, belt axis) – applied when the model is selected.
-        self.camera_profile: dict | None = None
+        self.camera_profile: dict[str, Any] | None = None
         self._ref_frames: list[np.ndarray] | None = None
         self._refs_dir: Path | None = None
         self._legacy = False  # loaded from the full version's folder layout
@@ -267,7 +267,7 @@ class QCModel:
         # model version and the history of updates
         self.accepted: list[int] = []
         self.version = 1
-        self.history: list[dict] = []
+        self.history: list[dict[str, Any]] = []
 
     @property
     def slug(self) -> str:
@@ -495,7 +495,7 @@ class QCModel:
     @classmethod
     def load(cls, path: str | Path) -> QCModel:
         path = Path(path)
-        extra: dict = {}
+        extra: dict[str, Any] = {}
         if (path / "recipe.json").exists():  # saved by the full version (format 3)
             extra = json.loads((path / "recipe.json").read_text(encoding="utf-8"))
             if extra.get("channels") != ["main"]:
@@ -583,7 +583,7 @@ class QCModel:
             out.append(f"Inconsistent hole count in reference(s) {numbers(geo['inconsistent_references'])}.")
         return out
 
-    def summary(self) -> dict:
+    def summary(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "slug": self.slug,
@@ -634,7 +634,7 @@ def model_path(models_dir: str | Path, slug: str) -> Path | None:
     return p
 
 
-def list_models(models_dir: str | Path) -> list[dict]:
+def list_models(models_dir: str | Path) -> list[dict[str, Any]]:
     out = []
     for p in sorted(Path(models_dir).glob("*")):
         if p.suffix in (".tmp", ".old", ".swap") or model_path(models_dir, p.name) is None:

@@ -19,6 +19,7 @@ import zipfile
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from .model import slugify
 
@@ -32,11 +33,11 @@ def has_results(results_dir: str | Path) -> bool:
     return root.exists() and any(p.is_file() for p in root.rglob("*"))
 
 
-def _version_key(row: dict) -> str:
+def _version_key(row: dict[str, Any]) -> str:
     return f"{row.get('model', '')} v{row.get('model_version') or 1}"
 
 
-def _read_inspections(results_dir: Path) -> tuple[Counter[str], Counter[str], Counter[str], list[str], dict]:
+def _read_inspections(results_dir: Path) -> tuple[Counter[str], Counter[str], Counter[str], list[str], dict[str, Any]]:
     """inspection_log.csv files → (results, defect types, models, times, per model version)."""
     results: Counter[str] = Counter()
     defects: Counter[str] = Counter()
@@ -58,7 +59,7 @@ def _read_inspections(results_dir: Path) -> tuple[Counter[str], Counter[str], Co
 
 def _read_feedback(results_dir: Path) -> tuple[Counter[str], dict[str, Counter[str]]]:
     """feedback_log.csv files → (outcomes, outcomes per model version). The last word counts."""
-    latest: dict[str, dict] = {}
+    latest: dict[str, dict[str, Any]] = {}
     for log in sorted(results_dir.rglob("feedback_log.csv")):
         with log.open(newline="", encoding="utf-8") as f:
             latest.update({row["image_id"]: row for row in csv.DictReader(f)})
@@ -69,7 +70,7 @@ def _read_feedback(results_dir: Path) -> tuple[Counter[str], dict[str, Counter[s
     return fb, per_version
 
 
-def summarize(results_dir: str | Path) -> dict:
+def summarize(results_dir: str | Path) -> dict[str, Any]:
     """Evaluates all inspection logs in the results folder."""
     results, defects, models, times, insp_v = _read_inspections(Path(results_dir))
     fb, fb_v = _read_feedback(Path(results_dir))
@@ -111,7 +112,7 @@ def summarize(results_dir: str | Path) -> dict:
     }
 
 
-def _summary_text(label: str, s: dict) -> str:
+def _summary_text(label: str, s: dict[str, Any]) -> str:
     lines = [
         f"Batch:            {label}",
         f"Archived:         {datetime.now().isoformat(timespec='seconds')}",
@@ -147,7 +148,7 @@ def _summary_text(label: str, s: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def create_archive(results_dir: str | Path, archive_dir: str | Path, label: str = "") -> dict:
+def create_archive(results_dir: str | Path, archive_dir: str | Path, label: str = "") -> dict[str, Any]:
     """Packs the results folder into a ZIP file and empties it afterwards."""
     results = Path(results_dir)
     if not has_results(results):
@@ -179,7 +180,7 @@ def create_archive(results_dir: str | Path, archive_dir: str | Path, label: str 
     return {"file": target.name, "size_bytes": target.stat().st_size, "summary": summary}
 
 
-def list_archives(archive_dir: str | Path) -> list[dict]:
+def list_archives(archive_dir: str | Path) -> list[dict[str, Any]]:
     out = []
     for p in sorted(Path(archive_dir).glob("*.zip"), key=lambda x: x.stat().st_mtime, reverse=True):
         entry = {

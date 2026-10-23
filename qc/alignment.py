@@ -24,8 +24,9 @@ can later be projected back exactly into the original image.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar, cast
 
 import cv2
 import numpy as np
@@ -36,7 +37,7 @@ from .config import LocalizationConfig
 @dataclass
 class PartDetection:
     contour: np.ndarray
-    rect: tuple  # cv2.minAreaRect
+    rect: tuple[Any, ...]  # cv2.minAreaRect
     filled_mask: np.ndarray  # outer contour filled (including holes)
     part_mask: np.ndarray  # actual material (without holes)
     polarity: str  # "bright" | "dark" (part relative to background)
@@ -54,7 +55,7 @@ class AlignedPart:
     filled_mask: np.ndarray  # aligned, uint8 0/255
     part_mask: np.ndarray  # aligned, uint8 0/255
     to_orig: np.ndarray  # 3×3: canvas coordinates → working image coordinates
-    rect: tuple
+    rect: tuple[Any, ...]
     polarity: str
     part_level: float
     bg_level: float
@@ -83,7 +84,7 @@ def _foreground(blur: np.ndarray, t: float, polarity: str) -> tuple[np.ndarray, 
 
 def _inside(contour: np.ndarray, shape: tuple[int, ...], m: int) -> bool:
     x, y, bw, bh = cv2.boundingRect(contour)
-    return x > m and y > m and x + bw < shape[1] - m and y + bh < shape[0] - m
+    return bool(x > m and y > m and x + bw < shape[1] - m and y + bh < shape[0] - m)
 
 
 def _contrast(blur: np.ndarray, contour: np.ndarray) -> float:
@@ -168,7 +169,7 @@ def detect_part(gray: np.ndarray, cfg: LocalizationConfig) -> PartDetection | No
     )
 
 
-def _coarse_angle(rect: tuple) -> float:
+def _coarse_angle(rect: tuple[Any, ...]) -> float:
     box = cv2.boxPoints(rect)
     e1, e2 = box[1] - box[0], box[2] - box[1]
     long_edge = e1 if np.linalg.norm(e1) >= np.linalg.norm(e2) else e2
@@ -214,7 +215,13 @@ def _canvas_rotation(canvas: tuple[int, int], angle: float, mirror: bool = False
     return r
 
 
-def _warp(img: np.ndarray, to_canvas: np.ndarray, canvas: tuple[int, int], nearest=False, border_value=0):
+def _warp(
+    img: np.ndarray,
+    to_canvas: np.ndarray,
+    canvas: tuple[int, int],
+    nearest: bool = False,
+    border_value: float | tuple[int, ...] = 0,
+) -> np.ndarray:
     interp = cv2.INTER_NEAREST if nearest else cv2.INTER_LINEAR
     return cv2.warpAffine(
         img,
@@ -230,7 +237,8 @@ def _normalize(gray: np.ndarray, bg: float, part: float) -> np.ndarray:
     denom = part - bg
     if abs(denom) < 1e-3:
         denom = 1e-3 if denom >= 0 else -1e-3
-    return np.clip((gray.astype(np.float32) - bg) / denom, -0.5, 1.5).astype(np.float32)
+    out: np.ndarray = np.clip((gray.astype(np.float32) - bg) / denom, -0.5, 1.5).astype(np.float32)
+    return out
 
 
 def _masked_median(gray: np.ndarray, mask: np.ndarray) -> float | None:
@@ -262,11 +270,21 @@ def levels(gray: np.ndarray, det: PartDetection) -> tuple[float, float]:
     return part_level, bg_level
 
 
-def _render_norm(gray, to_canvas, canvas, part_level, bg_level) -> np.ndarray:
+def _render_norm(
+    gray: np.ndarray, to_canvas: np.ndarray, canvas: tuple[int, int], part_level: float, bg_level: float
+) -> np.ndarray:
     return _normalize(_warp(gray, to_canvas, canvas, border_value=int(bg_level)), bg_level, part_level)
 
 
-def render(frame, gray, det, to_canvas, canvas, part_level, bg_level) -> AlignedPart:
+def render(
+    frame: np.ndarray,
+    gray: np.ndarray,
+    det: PartDetection,
+    to_canvas: np.ndarray,
+    canvas: tuple[int, int],
+    part_level: float,
+    bg_level: float,
+) -> AlignedPart:
     gray_c = _warp(gray, to_canvas, canvas, border_value=int(bg_level))
     bgr_c = _warp(frame, to_canvas, canvas, border_value=(int(bg_level),) * 3)
     filled_c = _warp(det.filled_mask, to_canvas, canvas, nearest=True)
@@ -318,17 +336,18 @@ def _rotate_canvas_image(img: np.ndarray, angle: float, mirror: bool) -> np.ndar
     return cv2.warpAffine(img, _canvas_rotation((w, h), angle, mirror)[:2], (w, h), flags=cv2.INTER_LINEAR)
 
 
-_REF_CACHE: dict[tuple, tuple[np.ndarray, object]] = {}
+_REF_CACHE: dict[tuple[int, str], tuple[np.ndarray, object]] = {}
+_T = TypeVar("_T")
 
 
-def _ref_cached(reference: np.ndarray, key: str, build):
+def _ref_cached(reference: np.ndarray, key: str, build: Callable[[], _T]) -> _T:
     """Per-reference precomputation (the reference image is fixed per model): computed once,
     reused for every inspected part. Keyed by object identity; the array itself is kept in
     the entry so its id cannot be reused while cached."""
     k = (id(reference), key)
     hit = _REF_CACHE.get(k)
     if hit is not None and hit[0] is reference:
-        return hit[1]
+        return cast(_T, hit[1])
     if len(_REF_CACHE) > 32:
         _REF_CACHE.clear()
     val = build()
@@ -336,7 +355,7 @@ def _ref_cached(reference: np.ndarray, key: str, build):
     return val
 
 
-def _rotation_bank(reference_norm: np.ndarray, patch: int = 72):
+def _rotation_bank(reference_norm: np.ndarray, patch: int = 72) -> tuple[tuple[int, ...], np.ndarray]:
     """The small reference patch rotated by −0…−359° (1° steps), each row zero-mean and unit-length.
 
     ncc(rotate(img, a), ref) == ncc(img, rotate(ref, −a)) – the content fits into the square patch
@@ -373,7 +392,7 @@ def find_rotation(
     if img.shape != shape:
         img = cv2.resize(img, shape[::-1], interpolation=cv2.INTER_AREA)
 
-    def unit(v):
+    def unit(v: np.ndarray) -> np.ndarray:
         v = v.ravel().astype(np.float32)
         v = v - v.mean()
         return v / (float(np.linalg.norm(v)) + 1e-9)
@@ -460,17 +479,28 @@ def _use_outline_datum(cfg: LocalizationConfig, reference_norm: np.ndarray) -> b
         return False
     c = max(contours, key=cv2.contourArea)
     circularity = 4 * math.pi * cv2.contourArea(c) / max(1.0, cv2.arcLength(c, True) ** 2)
-    return circularity < 0.9
+    return bool(circularity < 0.9)
 
 
-def _ecc_refine(frame, gray, det, norm, to_canvas, canvas, ref, part_level, bg_level, outline_datum=False):
+def _ecc_refine(
+    frame: np.ndarray,
+    gray: np.ndarray,
+    det: PartDetection,
+    norm: np.ndarray,
+    to_canvas: np.ndarray,
+    canvas: tuple[int, int],
+    ref: np.ndarray,
+    part_level: float,
+    bg_level: float,
+    outline_datum: bool = False,
+) -> AlignedPart | None:
     # Registration on the smoothed shape only. Surface texture such as brushed metal
     # rotates with the part and would otherwise bias the result.
     # outline_datum=True: only the filled outer contour is used (like datum edges on a
     # drawing), so a displaced hole cannot pull the alignment and hide its own offset.
     # The grey values at the edge are kept (sub-pixel information); only the interior,
     # at least 2 px away from any edge, is flattened to 1 to remove texture.
-    def shape(img):
+    def shape(img: np.ndarray) -> np.ndarray:
         img = np.clip(img, 0, 1).astype(np.float32)
         binary = (img > 0.5).astype(np.uint8)
         if outline_datum:

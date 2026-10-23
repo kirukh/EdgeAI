@@ -2,26 +2,34 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
+
 import cv2
 import numpy as np
 
 from .alignment import AlignedPart
+
+if TYPE_CHECKING:
+    from .methods.base import Defect
 
 GREEN = (60, 190, 60)
 RED = (40, 40, 230)
 
 
 def _to_orig(pts: np.ndarray, to_orig: np.ndarray) -> np.ndarray:
-    p = np.hstack([pts, np.ones((len(pts), 1))]) @ to_orig.T
+    p: np.ndarray = np.hstack([pts, np.ones((len(pts), 1))]) @ to_orig.T
     return p[:, :2]
 
 
-def _box_pts(bbox) -> np.ndarray:
+def _box_pts(bbox: Sequence[float]) -> np.ndarray:
     x, y, w, h = bbox
     return np.array([[x, y], [x + w, y], [x + w, y + h], [x, y + h]], np.float64)
 
 
-def _put_label(img, text, org, color, scale=0.5):
+def _put_label(
+    img: np.ndarray, text: str, org: tuple[float, float], color: tuple[int, int, int], scale: float = 0.5
+) -> None:
     x, y = int(org[0]), int(org[1])
     (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 1)
     x = max(2, min(x, img.shape[1] - tw - 4))
@@ -42,7 +50,9 @@ def heat_overlay(img: np.ndarray, heat: np.ndarray, strength: float = 0.6) -> np
     return (img * (1 - alpha) + color * alpha).astype(np.uint8)
 
 
-def annotate(aligned: AlignedPart, ok: bool, defects: list, heat: np.ndarray | None) -> tuple[np.ndarray, np.ndarray]:
+def annotate(
+    aligned: AlignedPart, ok: bool, defects: list[Defect], heat: np.ndarray | None
+) -> tuple[np.ndarray, np.ndarray]:
     """Returns (full image with markings, detail view of the aligned part)."""
     frame = aligned.frame.copy()
     h, w = frame.shape[:2]
@@ -78,4 +88,4 @@ def annotate(aligned: AlignedPart, ok: bool, defects: list, heat: np.ndarray | N
 
 def encode_jpg(img: np.ndarray, quality: int = 85) -> bytes:
     """JPEG bytes for the web UI."""
-    return cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])[1].tobytes()
+    return bytes(cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])[1].tobytes())

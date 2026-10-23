@@ -6,7 +6,7 @@ from __future__ import annotations
 import math
 from collections.abc import Collection
 from dataclasses import dataclass
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import cv2
 import numpy as np
@@ -100,7 +100,9 @@ def _subpixel_moments(a: AlignedPart, filled: np.ndarray, material: np.ndarray) 
 _K_EDGE = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
 
 
-def _match(expected_xy: np.ndarray, expected_d: np.ndarray, holes: list[Hole]):
+def _match(
+    expected_xy: np.ndarray, expected_d: np.ndarray, holes: list[Hole]
+) -> tuple[list[tuple[int, int]], list[int], list[int]]:
     """Assigns detected holes to the nominal holes (Hungarian matching)."""
     if len(expected_xy) == 0 or len(holes) == 0:
         return [], list(range(len(expected_xy))), list(range(len(holes)))
@@ -114,7 +116,7 @@ def _match(expected_xy: np.ndarray, expected_d: np.ndarray, holes: list[Hole]):
             if d < gate and 0.4 < ratio < 2.5:
                 cost[i, j] = d / expected_d[i] + abs(math.log(ratio))
     rows, cols = linear_sum_assignment(cost)
-    pairs = [(r, c) for r, c in zip(rows, cols, strict=True) if cost[r, c] < big]
+    pairs = [(int(r), int(c)) for r, c in zip(rows, cols, strict=True) if cost[r, c] < big]
     un_e = [i for i in range(len(expected_xy)) if i not in {p[0] for p in pairs}]
     un_d = [j for j in range(len(holes)) if j not in {p[1] for p in pairs}]
     return pairs, un_e, un_d
@@ -167,7 +169,7 @@ class GeometryMethod(Method):
     name = "geometry"
     outline_tolerated: np.ndarray | None = None  # outline deviations accepted by the operator (mask)
 
-    def fit(self, samples, accepted=()):
+    def fit(self, samples: list[AlignedPart], accepted: Collection[int] = ()) -> None:
         normal, acc = split_accepted(len(samples), accepted)
         detected = [find_holes(s, self.cfg.hole_min_area_px)[0] for s in samples]
         counts = [len(detected[i]) for i in normal]
@@ -203,7 +205,9 @@ class GeometryMethod(Method):
             "n_samples": len(samples),
         }
 
-    def _learn_nominal(self, per_hole: list[dict[int, HoleMeasurement]], masks: list[np.ndarray], shape) -> None:
+    def _learn_nominal(
+        self, per_hole: list[dict[int, HoleMeasurement]], masks: list[np.ndarray], shape: tuple[int, ...]
+    ) -> None:
         """Nominal position, diameter, shape and mask of every hole = mean over the references."""
         xs = [[(v.x, v.y) for v in ph.values()] for ph in per_hole]
         ds = [[v.d for v in ph.values()] for ph in per_hole]
@@ -220,7 +224,9 @@ class GeometryMethod(Method):
             else np.zeros((0, *shape), np.uint8)
         )
 
-    def _screen(self, per_hole: list[dict[int, HoleMeasurement]], inconsistent, outline_areas) -> None:
+    def _screen(
+        self, per_hole: list[dict[int, HoleMeasurement]], inconsistent: list[int], outline_areas: list[float]
+    ) -> None:
         """Leave-one-out: is a reference a geometry defect compared with the OTHER references?"""
         c = self.cfg
         self.suspects = {}
@@ -277,7 +283,7 @@ class GeometryMethod(Method):
             tol = c.pos_tol_mm / mm_per_px  # absolute tolerance from the drawing
         else:
             tol = max(c.pos_tol_px, c.tol_sigma * self.pos_std[e])
-        return max(tol, self.pos_accept[e])  # never stricter than what the operator accepted
+        return float(max(tol, self.pos_accept[e]))  # never stricter than what the operator accepted
 
     def _dia_tol(self, e: int, mm_per_px: float | None) -> float:
         c = self.cfg
@@ -285,9 +291,9 @@ class GeometryMethod(Method):
             tol = c.dia_tol_mm / mm_per_px
         else:
             tol = max(c.dia_tol_ratio * self.exp_d[e], c.tol_sigma * self.d_std[e])
-        return max(tol, self.d_accept[e])
+        return float(max(tol, self.d_accept[e]))
 
-    def score(self, s, sens=1.0, mm_per_px=None):
+    def score(self, s: AlignedPart, sens: float = 1.0, mm_per_px: float | None = None) -> MethodResult:
         sens = max(float(sens), 1e-3)
         holes, _ = find_holes(s, self.cfg.hole_min_area_px)
         pairs, un_e, un_d = _match(self.exp_xy, self.exp_d, holes)
@@ -301,7 +307,9 @@ class GeometryMethod(Method):
         score = max(worst, outline_worst, presence)
         return MethodResult(self.name, bool(score < 1.0 and not defects), float(score), defects)
 
-    def _check_matched(self, holes, pairs, sens, mm_per_px) -> tuple[list[Defect], float]:
+    def _check_matched(
+        self, holes: list[Hole], pairs: list[tuple[int, int]], sens: float, mm_per_px: float | None
+    ) -> tuple[list[Defect], float]:
         """Holes found at their nominal place: position, diameter, shape (graded by the sensitivity)."""
         defects: list[Defect] = []
         worst = 0.0
@@ -329,7 +337,9 @@ class GeometryMethod(Method):
                 defects.append(Defect("HOLE_SHAPE", self.name, box, text, a_err / a_tol))
         return defects, worst
 
-    def _check_relocated(self, holes, un_e, un_d, sens, mm_per_px) -> tuple[list[Defect], list[int], list[int]]:
+    def _check_relocated(
+        self, holes: list[Hole], un_e: list[int], un_d: list[int], sens: float, mm_per_px: float | None
+    ) -> tuple[list[Defect], list[int], list[int]]:
         """A nominal hole without a match + an unmatched hole of the same size far away = position defect.
         Returns (defects, still missing nominal holes, still unexplained detected holes)."""
         defects: list[Defect] = []
@@ -352,7 +362,7 @@ class GeometryMethod(Method):
             )
         return defects, missing, [j for j in un_d if j not in used]
 
-    def _check_missing(self, s, missing) -> list[Defect]:
+    def _check_missing(self, s: AlignedPart, missing: list[int]) -> list[Defect]:
         """Nominal holes without see-through: an edge ring at the place = not drilled through."""
         if not missing:
             return []
@@ -370,7 +380,7 @@ class GeometryMethod(Method):
                 defects.append(Defect("MISSING_HOLE", self.name, box, f"no hole visible (rim ratio {rim:.2f})", 2.0))
         return defects
 
-    def _check_extra(self, holes, extra, mm_per_px) -> list[Defect]:
+    def _check_extra(self, holes: list[Hole], extra: list[int], mm_per_px: float | None) -> list[Defect]:
         return [
             Defect(
                 "EXTRA_HOLE",
@@ -382,7 +392,7 @@ class GeometryMethod(Method):
             for j in extra
         ]
 
-    def _check_outline(self, s, sens, mm_per_px) -> tuple[list[Defect], float]:
+    def _check_outline(self, s: AlignedPart, sens: float, mm_per_px: float | None) -> tuple[list[Defect], float]:
         outline = self._outline_diff(s)
         min_area = self.outline_min_area / sens
         defects = []
@@ -392,7 +402,7 @@ class GeometryMethod(Method):
             defects.append(Defect("OUTLINE", self.name, bbox, f"{text} deviation", area / min_area))
         return defects, largest / min_area
 
-    def state(self):
+    def state(self) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
         meta = {"outline_min_area": self.outline_min_area, "report": self.report}
         arrays = {
             "exp_xy": self.exp_xy,
@@ -410,7 +420,7 @@ class GeometryMethod(Method):
             arrays["outline_tolerated"] = self.outline_tolerated
         return meta, arrays
 
-    def load_state(self, meta, arrays):
+    def load_state(self, meta: dict[str, Any], arrays: dict[str, np.ndarray]) -> None:
         self.outline_min_area = meta["outline_min_area"]
         self.report = meta.get("report", {})
         for k in ("exp_xy", "pos_std", "exp_d", "d_std", "exp_aspect", "hole_masks", "ref_filled"):

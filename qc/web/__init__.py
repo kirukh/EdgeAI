@@ -16,7 +16,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory
+from flask.typing import ResponseReturnValue
 
 from ..model import TrainingError
 from ..system import QCSystem
@@ -43,14 +44,14 @@ def create_app(system: QCSystem) -> Flask:
     app.register_blueprint(setup_api.bp)
 
     @app.before_request
-    def _check_request():
+    def _check_request() -> ResponseReturnValue | None:
         reason = auth.check_request(request)
         if reason:
             return jsonify({"ok": False, "error": reason}), 403
         return None
 
     @app.after_request
-    def _headers(resp):
+    def _headers(resp: Response) -> Response:
         resp.headers.update(SECURITY_HEADERS)
         if request.path.startswith("/api/"):
             resp.headers["Cache-Control"] = "no-store"
@@ -58,15 +59,15 @@ def create_app(system: QCSystem) -> Flask:
 
     @app.errorhandler(ValueError)
     @app.errorhandler(TrainingError)
-    def _user_error(e):
+    def _user_error(e: Exception) -> ResponseReturnValue:
         return jsonify({"ok": False, "error": str(e)}), 400
 
     @app.get("/")
-    def index():
+    def index() -> ResponseReturnValue:
         return send_from_directory(STATIC, "index.html")
 
     @app.get("/static/<path:name>")
-    def static_file(name: str):
+    def static_file(name: str) -> ResponseReturnValue:
         return send_from_directory(STATIC, name, max_age=0)  # revalidate (ETag) – no stale UI after an update
 
     return app

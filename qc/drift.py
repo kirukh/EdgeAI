@@ -16,6 +16,7 @@ setup before the detection quality silently degrades.
 from __future__ import annotations
 
 from collections import deque
+from typing import Any
 
 import numpy as np
 
@@ -56,7 +57,7 @@ class DriftMonitor:
         bad = rel < -limit if key == "sharpness" else abs(rel) > limit  # sharper is never a problem
         return f"{rel * 100:+.1f} %", bad
 
-    def state(self) -> dict:
+    def state(self) -> dict[str, Any]:
         """Current deviations and warnings (only once at least half the window is filled)."""
         rows, warnings = [], []
         for k, ref in self.baseline.items():

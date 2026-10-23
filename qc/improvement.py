@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 
@@ -36,10 +37,12 @@ class ModelImprovement:
         self.cfg, self.models, self.lock, self.log = cfg, models, lock, log
         self.active_model, self.set_model = active_model, set_model
         self.running = False  # a model update is being trained
-        self.last: dict | None = None  # report of the last update (released or rejected)
+        self.last: dict[str, Any] | None = None  # report of the last update (released or rejected)
 
     # ------------------------------------------------------------------ operator decisions
-    def on_feedback(self, model: QCModel | None, entry: dict, frame: np.ndarray | None, outcome: str) -> dict:
+    def on_feedback(
+        self, model: QCModel | None, entry: dict[str, Any], frame: np.ndarray | None, outcome: str
+    ) -> dict[str, Any]:
         """Accepted parts wait for the next update; confirmed defective parts become test parts
         for its release check. Called under the lock."""
         lc = self.cfg.learning
@@ -144,7 +147,7 @@ class ModelImprovement:
         self.log("ok", f"Model “{restored.name}” restored to version {restored.version}.")
 
     # ------------------------------------------------------------------ accepted parts
-    def waiting(self, slug: str) -> list[dict]:
+    def waiting(self, slug: str) -> list[dict[str, Any]]:
         return [{"name": stem, **info} for stem, _, info in LearningStore(self.models.path(slug)).items(PENDING)]
 
     def discard(self, slug: str, name: str) -> None:
@@ -156,7 +159,7 @@ class ModelImprovement:
         self.log("info", f"Accepted part {name} of “{slug}” discarded – it will not be learned.")
 
     # ------------------------------------------------------------------ status
-    def notices(self, model: QCModel | None) -> list[dict]:
+    def notices(self, model: QCModel | None) -> list[dict[str, Any]]:
         """Hint for the operator screen about accepted parts and updates of the active model."""
         if model is None or model.path is None or not self.cfg.learning.enabled:
             return []
@@ -183,6 +186,6 @@ class ModelImprovement:
             return [{"level": "info", "text": f"{waiting} accepted part(s) waiting – the model learns them {when}."}]
         return []
 
-    def state(self) -> dict:
+    def state(self) -> dict[str, Any]:
         lc = self.cfg.learning
         return {"enabled": lc.enabled, "update_after": lc.update_after, "running": self.running, "last": self.last}

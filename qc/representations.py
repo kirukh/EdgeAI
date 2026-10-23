@@ -22,7 +22,8 @@ def _gray(a: AlignedPart) -> np.ndarray:
 def _norm(a: AlignedPart) -> np.ndarray:
     # Photometrically normalised: background 0, part 1 → robust against brightness changes.
     # Not clipped at 1, otherwise bright scratches/specular spots would disappear.
-    return np.clip(a.norm, 0.0, 1.5)
+    out: np.ndarray = np.clip(a.norm, 0.0, 1.5)
+    return out
 
 
 def _clahe(a: AlignedPart) -> np.ndarray:
@@ -35,7 +36,8 @@ def _edges(a: AlignedPart) -> np.ndarray:
     n = cv2.GaussianBlur(np.clip(a.norm, 0, 1.5), (5, 5), 0)
     gx = cv2.Sobel(n, cv2.CV_32F, 1, 0, ksize=3)
     gy = cv2.Sobel(n, cv2.CV_32F, 0, 1, ksize=3)
-    return np.clip(cv2.magnitude(gx, gy) / 2.0, 0, 1)
+    out: np.ndarray = np.clip(cv2.magnitude(gx, gy) / 2.0, 0, 1)
+    return out
 
 
 def _canny(a: AlignedPart) -> np.ndarray:

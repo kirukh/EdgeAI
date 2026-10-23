@@ -11,7 +11,7 @@ Supported sources (``CameraConfig.source``):
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -57,22 +57,22 @@ class CameraSource:
     def set_exposure(self, exposure_us: int, gain: float) -> None:
         raise NotImplementedError
 
-    def set_colour_gains(self, gains) -> None:
+    def set_colour_gains(self, gains: Sequence[float] | None) -> None:
         pass
 
-    def set_crop(self, crop) -> None:
+    def set_crop(self, crop: Sequence[float]) -> None:
         raise NotImplementedError
 
     def awb_start(self) -> None:
         pass
 
-    def awb_result(self):
+    def awb_result(self) -> tuple[float, float] | None:
         return None
 
     def set_lens(self, position: float) -> None:
         pass
 
-    def af_start(self, window) -> None:
+    def af_start(self, window: Sequence[float]) -> None:
         pass
 
     def af_state(self) -> tuple[str, float | None]:
@@ -104,7 +104,7 @@ class PiCameraSource(CameraSource):
             )
         self.cam.configure(config)
         self.has_autofocus = "AfMode" in self.cam.camera_controls
-        controls: dict = {}
+        controls: dict[str, Any] = {}
         if cfg.exposure_us > 0:
             # Fixed exposure + gain → reproducible brightness.
             # A short exposure time reduces motion blur on the conveyor.
@@ -158,7 +158,7 @@ class PiCameraSource(CameraSource):
     # ---- controls (applied by libcamera a few frames later; the caller waits for new frames) ----
     can_control = True
 
-    def _crop_max(self):
+    def _crop_max(self) -> tuple[int, ...]:
         try:
             return tuple(self.cam.camera_controls["ScalerCrop"][1])  # (min, max, default)
         except Exception:
@@ -168,11 +168,11 @@ class PiCameraSource(CameraSource):
     def set_exposure(self, exposure_us: int, gain: float) -> None:
         self.cam.set_controls({"AeEnable": False, "ExposureTime": int(exposure_us), "AnalogueGain": float(gain)})
 
-    def set_colour_gains(self, gains) -> None:
+    def set_colour_gains(self, gains: Sequence[float] | None) -> None:
         if gains:
             self.cam.set_controls({"AwbEnable": False, "ColourGains": (float(gains[0]), float(gains[1]))})
 
-    def set_crop(self, crop) -> None:
+    def set_crop(self, crop: Sequence[float]) -> None:
         """Digital zoom: the ISP reads only this part of the sensor and scales it to the output size."""
         mx, my, mw, mh = self._crop_max()
         x, y, w, h = crop
@@ -183,7 +183,7 @@ class PiCameraSource(CameraSource):
     def awb_start(self) -> None:
         self.cam.set_controls({"AwbEnable": True})
 
-    def awb_result(self):
+    def awb_result(self) -> tuple[float, float] | None:
         g = self.last_metadata.get("ColourGains")
         return (round(float(g[0]), 3), round(float(g[1]), 3)) if g else None
 
@@ -191,7 +191,7 @@ class PiCameraSource(CameraSource):
         if self.has_autofocus and position is not None:
             self.cam.set_controls({"AfMode": 0, "LensPosition": float(position)})  # 0 = manual
 
-    def af_start(self, window) -> None:
+    def af_start(self, window: Sequence[float]) -> None:
         """Autofocus run on the part only (window = x, y, w, h as fractions of the current crop)."""
         if not self.has_autofocus:
             return
@@ -209,13 +209,13 @@ class PiCameraSource(CameraSource):
         state = {2: "focused", 3: "failed"}.get(st, "scanning") if isinstance(st, int) else "scanning"
         return state, (float(pos) if pos is not None else None)
 
-    def read(self):
+    def read(self) -> np.ndarray | None:
         # picamera2 "RGB888" delivers BGR byte order – matches OpenCV directly.
         # queue=False: always a fresh frame, never one that waited in a buffer while the Pi was busy.
         # last_age_s = time since the sensor exposed it → exact timing of the reject pulse.
         req = self.cam.capture_request()
         try:
-            frame = req.make_array("main")
+            frame: np.ndarray = req.make_array("main")
             self.last_metadata = req.get_metadata()
             ts = self.last_metadata.get("SensorTimestamp")
         finally:
@@ -225,7 +225,7 @@ class PiCameraSource(CameraSource):
             self.last_age_s = 0.0
         return frame
 
-    def close(self):
+    def close(self) -> None:
         self.cam.stop()
         self.cam.close()
 
@@ -248,11 +248,11 @@ class OpenCVSource(CameraSource):
         if cfg.lock_white_balance:
             self.cap.set(cv2.CAP_PROP_AUTO_WB, 0)
 
-    def read(self):
+    def read(self) -> np.ndarray | None:
         ok, frame = self.cap.read()
         return frame if ok else None
 
-    def close(self):
+    def close(self) -> None:
         self.cap.release()
 
 
@@ -274,7 +274,7 @@ class FolderSource(CameraSource):
     def current_file(self) -> Path:
         return self.files[(self.idx - 1) % len(self.files)] if self.idx else self.files[0]
 
-    def next_part(self):
+    def next_part(self) -> np.ndarray | None:
         if self.idx >= len(self.files):
             if not self.loop:
                 return None
@@ -283,7 +283,7 @@ class FolderSource(CameraSource):
         self.idx += 1
         return self.current
 
-    def read(self):
+    def read(self) -> np.ndarray | None:
         time.sleep(0.05)
         return self.current
 
@@ -329,12 +329,12 @@ class SimulatorSource(CameraSource):
         """Next part (e.g. after a simulator setting changed)."""
         self._spawn()
 
-    def _spawn(self):
+    def _spawn(self) -> None:
         defect = None
         if not self.force_good and self.rng.random() < self.defect_rate:
             defect = str(self.rng.choice(self.syn.DEFECTS))
         self.part = self.syn.make_part(self.part_type, defect, self.rng)
-        self._layers: dict[tuple[str, float], tuple] = {}
+        self._layers: dict[tuple[str, float], tuple[Any, ...]] = {}
         self.x = -200.0
         self.y = 240 + self.rng.uniform(-25, 25)
         if self.cfg.sim_any_angle:
@@ -344,7 +344,7 @@ class SimulatorSource(CameraSource):
         self.gap = self.rng.integers(0, 20)
         self._stopped, self._stop_left = False, 0  # stop-and-go belt (sim_stop_frames)
 
-    def _layer(self, light: str):
+    def _layer(self, light: str) -> tuple[Any, ...]:
         key = (light, self.crop[2])
         if key not in self._layers:
             self._layers[key] = self.syn.render_layers(
@@ -359,17 +359,18 @@ class SimulatorSource(CameraSource):
     def set_exposure(self, exposure_us: int, gain: float) -> None:
         self.exposure = (float(exposure_us), float(gain))
 
-    def set_crop(self, crop) -> None:
+    def set_crop(self, crop: Sequence[float]) -> None:
         self.crop = tuple(float(v) for v in crop)
 
-    def awb_result(self):
-        return tuple(self.cfg.colour_gains)
+    def awb_result(self) -> tuple[float, float] | None:
+        g = self.cfg.colour_gains
+        return float(g[0]), float(g[1])
 
     def set_lens(self, position: float) -> None:
         if self.has_autofocus and position is not None:
             self.defocus = 0.0 if abs(position - 4.0) < 0.05 else 2.0
 
-    def af_start(self, window) -> None:
+    def af_start(self, window: Sequence[float]) -> None:
         if self.has_autofocus:
             self._af = 4  # "scanning" for a few frames
 
@@ -393,13 +394,13 @@ class SimulatorSource(CameraSource):
     def current_defect(self) -> str | None:
         return self.part.defect
 
-    def set_lighting(self, lighting: str):
+    def set_lighting(self, lighting: str) -> None:
         """Simulator setting (UI): front light or backlight."""
         self.cfg.sim_lighting = lighting
         self.light = lighting
         self._spawn()
 
-    def read(self):
+    def read(self) -> np.ndarray | None:
         # Limit the frame rate so the simulator does not max out the CPU
         wait = 1.0 / max(1, self.cfg.fps) - (time.time() - self.last_time)
         if wait > 0:

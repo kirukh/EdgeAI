@@ -28,6 +28,7 @@ import threading
 import time
 from collections import deque
 from datetime import datetime
+from typing import Any
 
 import cv2
 import numpy as np
@@ -83,7 +84,7 @@ class QCSystem:
         self.lock = threading.RLock()
         self.mode = "idle"
         self.model: QCModel | None = None
-        self.messages: deque[dict] = deque(maxlen=MESSAGES_KEPT)
+        self.messages: deque[dict[str, Any]] = deque(maxlen=MESSAGES_KEPT)
         self.trigger = PartTrigger(cfg.trigger, cfg.localization)
         self.teach = TeachIn(cfg.target_reference_count, cfg.localization)
         self.results = ResultStore(cfg.storage, cfg.localization.work_width)
@@ -98,8 +99,8 @@ class QCSystem:
         self._stop = threading.Event()
         self._manual = threading.Event()
         self._threads: list[threading.Thread] = []
-        self._jobs: queue.Queue = queue.Queue(maxsize=QUEUE_PARTS)
-        self._burst: dict | None = None
+        self._jobs: queue.Queue[tuple[list[np.ndarray], bool]] = queue.Queue(maxsize=QUEUE_PARTS)
+        self._burst: dict[str, Any] | None = None
         self._last_folder_step = 0.0
         self.folder_interval = 1.0
         self.models = ModelStore(cfg.storage.models_dir)
@@ -192,8 +193,9 @@ class QCSystem:
         if manual:
             self._manual.clear()
             if isinstance(self.camera, FolderSource) and self.mode == "learning":
-                frame = self.camera.next_part()
-            part = frame if active else None
+                part = self.camera.next_part() if active else None
+            else:
+                part = frame if active else None
         return part, manual
 
     def _poll_belt(self, frame: np.ndarray, t_capture: float, active: bool) -> np.ndarray | None:
@@ -490,7 +492,7 @@ class QCSystem:
                 self.mode = "idle"
                 self.log("info", "Inspection stopped.")
 
-    def _inspect(self, model: QCModel, shots: list[np.ndarray]) -> dict:
+    def _inspect(self, model: QCModel, shots: list[np.ndarray]) -> dict[str, Any]:
         """Inspects one part (outside the lock – the UI stays responsive) and records the result."""
         ic = self.cfg.inspection
         res, idx = inspect_part(model, shots, ic.confirm_margin, ic.tie_is_nok)
@@ -541,7 +543,7 @@ class QCSystem:
         return model.sensitivity
 
     # ------------------------------------------------------------------ results
-    def feedback(self, rid: str, verdict: str) -> dict:
+    def feedback(self, rid: str, verdict: str) -> dict[str, Any]:
         """Supervisor confirms/corrects a result. "OK" on a NOK result = the part is within the
         company's tolerance → it is accepted and learned with the next model update."""
         with self.lock:
@@ -557,7 +559,7 @@ class QCSystem:
             self.improve.start(None, manual=False)
         return {"outcome": outcome, **learning}
 
-    def archive_results(self, label: str = "") -> dict:
+    def archive_results(self, label: str = "") -> dict[str, Any]:
         """Batch finished: pack all results into a ZIP, empty the results folder, reset counters."""
         with self.lock:  # results are written under this lock too → no half-written files
             if self.mode == "inspecting":
@@ -602,7 +604,7 @@ class QCSystem:
                 cam.respawn()
 
     # ------------------------------------------------------------------ status
-    def supervisor_notices(self) -> list[dict]:
+    def supervisor_notices(self) -> list[dict[str, Any]]:
         """Short plain-language hints for the operator screen (no technical details)."""
         m, n_moving, n_skipped = self.model, self.trigger.moving_captures, self.results.skipped
         drift = {r["key"] for r in self.drift.state()["rows"] if r["warning"]} if m is not None else set()
@@ -619,7 +621,7 @@ class QCSystem:
             out.append({"level": "error", "text": NOTICE_SKIPPED.format(n=n_skipped)})
         return out
 
-    def status(self) -> dict:
+    def status(self) -> dict[str, Any]:
         m, fa, r = self.model, self.cam.focus, self.results
         return {
             "mode": self.mode,

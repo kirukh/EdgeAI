@@ -27,6 +27,7 @@ import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -43,7 +44,7 @@ class LearningStore:
     def __init__(self, model_dir: Path):
         self.dir = Path(model_dir)
 
-    def add(self, kind: str, frame: np.ndarray, info: dict, limit: int) -> str:
+    def add(self, kind: str, frame: np.ndarray, info: dict[str, Any], limit: int) -> str:
         """Stores a part; the oldest ones are dropped above ``limit``. Returns its name."""
         folder = self.dir / kind
         folder.mkdir(parents=True, exist_ok=True)
@@ -63,7 +64,7 @@ class LearningStore:
     def count(self, kind: str) -> int:
         return len(self.stems(kind))
 
-    def items(self, kind: str) -> list[tuple[str, np.ndarray, dict]]:
+    def items(self, kind: str) -> list[tuple[str, np.ndarray, dict[str, Any]]]:
         out = []
         for stem in self.stems(kind):
             img = cv2.imread(str(self.dir / kind / f"{stem}.png"))
@@ -95,15 +96,15 @@ class UpdateReport:
     references: int = 0  # references of the new version
     known_bad_checked: int = 0  # known defective parts the current model detects …
     known_bad_still_detected: int = 0  # … and how many of them the candidate still detects
-    still_nok: list[str] = field(default_factory=list)  # accepted parts the candidate still rates NOK
-    reasons: list[str] = field(default_factory=list)  # why the update was rejected
-    used: list[str] = field(default_factory=list)  # names of the learned pending parts
+    still_nok: list[str] = field(default_factory=list[Any])  # accepted parts the candidate still rates NOK
+    reasons: list[str] = field(default_factory=list[Any])  # why the update was rejected
+    used: list[str] = field(default_factory=list[Any])  # names of the learned pending parts
 
     @property
     def released(self) -> bool:
         return self.version_after is not None
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d.pop("used")
         d["released"] = self.released
