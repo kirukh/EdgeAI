@@ -16,6 +16,8 @@ from .model import QCModel, has_previous, list_models, model_path
 
 
 class ModelStore:
+    """Model folders on disk: find, load, list, save and delete part types."""
+
     def __init__(self, models_dir: str | Path):
         self.dir = Path(models_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -32,12 +34,15 @@ class ModelStore:
         return path
 
     def load(self, slug: str) -> QCModel:
+        """Loads a model by name."""
         return QCModel.load(self.path(slug))
 
     def save(self, model: QCModel, keep_previous: bool = False, keep_side_data: bool = True) -> Path:
+        """Saves a model into its folder (``keep_previous``: the old version stays restorable)."""
         return model.save(self.dir, keep_previous=keep_previous, keep_side_data=keep_side_data)
 
     def delete(self, slug: str) -> None:
+        """Deletes a model folder."""
         shutil.rmtree(self.path(slug))
 
     def list(self) -> list[dict[str, Any]]:

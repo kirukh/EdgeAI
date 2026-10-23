@@ -25,10 +25,13 @@ from .model import slugify
 
 
 class ArchiveError(ValueError):
+    """Archive name not found or not allowed (e.g. a name that tries to leave the archive folder)."""
+
     pass
 
 
 def has_results(results_dir: str | Path) -> bool:
+    """Are there inspection results that have not been archived yet?"""
     root = Path(results_dir)
     return root.exists() and any(p.is_file() for p in root.rglob("*"))
 
@@ -181,6 +184,7 @@ def create_archive(results_dir: str | Path, archive_dir: str | Path, label: str 
 
 
 def list_archives(archive_dir: str | Path) -> list[dict[str, Any]]:
+    """Archives of finished batches, newest first (file name, size, date)."""
     out = []
     for p in sorted(Path(archive_dir).glob("*.zip"), key=lambda x: x.stat().st_mtime, reverse=True):
         entry = {
@@ -207,4 +211,5 @@ def archive_path(archive_dir: str | Path, name: str) -> Path:
 
 
 def delete_archive(archive_dir: str | Path, name: str) -> None:
+    """Deletes one archive (setup area)."""
     archive_path(archive_dir, name).unlink()

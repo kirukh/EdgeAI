@@ -55,19 +55,21 @@ select = [
     "C90",      # cyclomatic complexity
     "RUF",      # ruff-specific checks
     "N",        # PEP 8 naming
+    "D1",       # PEP 257: docstrings for modules, classes and public functions/methods
 ]
 ignore = [
     "N806",     # upper-case local names are conventional for matrices/images in image processing (H, W, K)
     "N812",     # "import methods as M" style module aliases
     "RUF001", "RUF002", "RUF003",  # ×, –, “ ” in UI texts and comments are intentional
     "RUF046",   # int(round(x)) is needed: with NumPy 1.x (Raspberry Pi OS Bookworm) round() of a NumPy float is a float
+    "D105", "D107",  # magic methods and __init__: the class docstring describes them
 ]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 15
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["C90"]
+"tests/*" = ["C90", "D1"]  # test names say what they check
 
 # ---------------------------------------------------------------- types (PEP 484)
 [tool.mypy]

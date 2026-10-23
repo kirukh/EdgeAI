@@ -36,6 +36,8 @@ EXPOSURE_ROUNDS = 12
 
 
 class CameraSetup:
+    """Camera profiles per part type, the automatic camera setup and the focus assistant."""
+
     def __init__(
         self,
         camera: CameraSource,
@@ -57,6 +59,7 @@ class CameraSetup:
 
     @property
     def controllable(self) -> bool:
+        """Can this camera be adjusted automatically (exposure, gain, zoom)?"""
         return bool(self.camera.can_control and self.cfg.autosetup.enabled)
 
     # ------------------------------------------------------------------ profiles
@@ -104,6 +107,7 @@ class CameraSetup:
             self.apply(None)  # never teach in with another part's zoom
 
     def end_teach_in(self) -> None:
+        """Teach-in finished or cancelled: the belt path measurement ends."""
         self.profile, self.path = None, None
 
     # ------------------------------------------------------------------ static step

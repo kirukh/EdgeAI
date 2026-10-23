@@ -36,6 +36,8 @@ from .config import LocalizationConfig
 
 @dataclass
 class PartDetection:
+    """Result of ``detect_part``: outline, masks and position of the part in the image."""
+
     contour: np.ndarray
     rect: tuple[Any, ...]  # cv2.minAreaRect
     filled_mask: np.ndarray  # outer contour filled (including holes)
@@ -48,6 +50,8 @@ class PartDetection:
 
 @dataclass
 class AlignedPart:
+    """The part brought into the normalised pose of its model (canvas coordinates), ready for the inspection methods."""
+
     frame: np.ndarray  # working image (BGR), basis for the visualisation
     bgr: np.ndarray  # aligned part (BGR)
     gray: np.ndarray  # aligned, uint8
@@ -62,10 +66,12 @@ class AlignedPart:
 
 
 def to_gray(img: np.ndarray) -> np.ndarray:
+    """Grayscale copy of a BGR image (a gray image is returned unchanged)."""
     return img if img.ndim == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
 
 def resize_to_width(img: np.ndarray, width: int) -> np.ndarray:
+    """Image scaled to ``width`` pixels, keeping the aspect ratio."""
     h, w = img.shape[:2]
     if w == width:
         return img
@@ -258,6 +264,7 @@ def _masked_median(gray: np.ndarray, mask: np.ndarray) -> float | None:
 
 
 def levels(gray: np.ndarray, det: PartDetection) -> tuple[float, float]:
+    """(part, background) brightness – medians inside the part and outside it, for the photometric normalisation."""
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
     inner = cv2.erode(det.part_mask, k)
     outer = cv2.dilate(det.filled_mask, k, iterations=2)
@@ -285,6 +292,7 @@ def render(
     part_level: float,
     bg_level: float,
 ) -> AlignedPart:
+    """Warps the part onto the canvas and normalises it (background 0, part 1) → ``AlignedPart``."""
     gray_c = _warp(gray, to_canvas, canvas, border_value=int(bg_level))
     bgr_c = _warp(frame, to_canvas, canvas, border_value=(int(bg_level),) * 3)
     filled_c = _warp(det.filled_mask, to_canvas, canvas, nearest=True)
@@ -316,6 +324,7 @@ def _search_patch(norm: np.ndarray, size: int = 96) -> np.ndarray:
 
 
 def ncc(a: np.ndarray, b: np.ndarray) -> float:
+    """Normalised cross-correlation of two images of the same size (1 = identical up to brightness and contrast)."""
     a = a.ravel() - a.mean()
     b = b.ravel() - b.mean()
     return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9))

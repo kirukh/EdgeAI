@@ -31,6 +31,8 @@ LABELS = {
 
 
 class DriftMonitor:
+    """Image quality (contrast, background, part size, sharpness) of the last parts compared with the learning phase."""
+
     def __init__(self, cfg: DriftConfig):
         self.cfg = cfg
         self.baseline: dict[str, float] = {}
@@ -42,6 +44,7 @@ class DriftMonitor:
         self.values = {k: deque(maxlen=self.cfg.window) for k in self.baseline}
 
     def update(self, measurements: dict[str, float]) -> None:
+        """Adds the measurements of one inspected part."""
         for k, v in measurements.items():
             if k in self.values:
                 self.values[k].append(v)

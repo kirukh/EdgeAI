@@ -41,6 +41,7 @@ def body() -> dict[str, Any]:
 # ---------------------------------------------------------------- live image + status
 @bp.get("/stream.mjpg")
 def stream() -> ResponseReturnValue:
+    """Live image as MJPEG stream."""
     sys_ = system()
 
     def frames() -> Iterator[bytes]:
@@ -57,6 +58,7 @@ def stream() -> ResponseReturnValue:
 
 @bp.get("/snapshot.jpg")
 def snapshot() -> ResponseReturnValue:
+    """Current live image as JPEG."""
     if system().preview_jpeg is None:
         abort(404)
     return Response(system().preview_jpeg, mimetype="image/jpeg")
@@ -71,12 +73,14 @@ def _end_focus_without_setup() -> None:
 
 @bp.get("/api/status")
 def status() -> ResponseReturnValue:
+    """Complete system state for the UI."""
     _end_focus_without_setup()
     return jsonify(system().status())
 
 
 @bp.get("/api/options")
 def options() -> ResponseReturnValue:
+    """Method names and decision levels for the UI."""
     cfg = system().cfg.method
     return jsonify(
         {
@@ -90,6 +94,7 @@ def options() -> ResponseReturnValue:
 # ---------------------------------------------------------------- setup PIN
 @bp.post("/api/setup/unlock")
 def setup_unlock() -> ResponseReturnValue:
+    """Unlocks the setup area with the PIN → session token."""
     token, error, code = auth().unlock(str(body().get("pin", "")), request.remote_addr or "?")
     if token is None:
         system().log("warn", "Wrong setup PIN entered." if code == 403 else error)
@@ -101,6 +106,7 @@ def setup_unlock() -> ResponseReturnValue:
 
 @bp.post("/api/setup/lock")
 def setup_lock() -> ResponseReturnValue:
+    """Locks the setup area (ends the session)."""
     auth().lock(request.headers.get("X-Setup-Token", ""))
     _end_focus_without_setup()
     return ok()
@@ -108,24 +114,28 @@ def setup_lock() -> ResponseReturnValue:
 
 @bp.get("/api/setup/check")
 def setup_check() -> ResponseReturnValue:
+    """Is the setup area unlocked for this client, and is a PIN required?"""
     return jsonify({"unlocked": auth().unlocked(request), "pin_required": auth().pin_required})
 
 
 # ---------------------------------------------------------------- teach-in
 @bp.post("/api/camera-setup/start")
 def camera_setup_start() -> ResponseReturnValue:
+    """Starts the automatic camera setup."""
     system().start_camera_setup()
     return ok()
 
 
 @bp.post("/api/camera-setup/cancel")
 def camera_setup_cancel() -> ResponseReturnValue:
+    """Cancels the automatic camera setup."""
     system().cancel_camera_setup()
     return ok()
 
 
 @bp.post("/api/learn/start")
 def learn_start() -> ResponseReturnValue:
+    """Starts teaching in a part type."""
     d = body()
     system().start_learning(str(d.get("name", "")), bool(d.get("auto_finish")))
     return ok()
@@ -133,18 +143,21 @@ def learn_start() -> ResponseReturnValue:
 
 @bp.post("/api/learn/finish")
 def learn_finish() -> ResponseReturnValue:
+    """Finishes the teach-in and trains the model."""
     system().finish_learning()
     return ok()
 
 
 @bp.post("/api/learn/cancel")
 def learn_cancel() -> ResponseReturnValue:
+    """Cancels the teach-in."""
     system().cancel_learning()
     return ok()
 
 
 @bp.post("/api/learn/undo")
 def learn_undo() -> ResponseReturnValue:
+    """Removes a reference image of the teach-in."""
     idx = body().get("index")
     system().undo_reference(int(idx) if idx is not None else None)
     return ok()
@@ -152,6 +165,7 @@ def learn_undo() -> ResponseReturnValue:
 
 @bp.get("/api/learn/thumb/<int:i>.jpg")
 def learn_thumb(i: int) -> ResponseReturnValue:
+    """Thumbnail of a reference image of the teach-in."""
     thumbs = system().teach.thumbs
     if not 0 <= i < len(thumbs):
         abort(404)
@@ -160,6 +174,7 @@ def learn_thumb(i: int) -> ResponseReturnValue:
 
 @bp.post("/api/capture")
 def capture() -> ResponseReturnValue:
+    """Takes the next frame as a part (stopped belt)."""
     system().manual_capture()
     return ok()
 
@@ -167,23 +182,27 @@ def capture() -> ResponseReturnValue:
 # ---------------------------------------------------------------- inspection
 @bp.post("/api/inspect/start")
 def inspect_start() -> ResponseReturnValue:
+    """Starts the inspection."""
     system().start_inspection(body().get("model"))
     return ok()
 
 
 @bp.post("/api/inspect/stop")
 def inspect_stop() -> ResponseReturnValue:
+    """Stops the inspection."""
     system().stop_inspection()
     return ok()
 
 
 @bp.get("/api/models")
 def models() -> ResponseReturnValue:
+    """Saved part types with their learning state."""
     return jsonify(system().models.list())
 
 
 @bp.post("/api/models/<slug>/select")
 def model_select(slug: str) -> ResponseReturnValue:
+    """Selects a part type."""
     system().select_model(slug)
     return ok()
 
@@ -191,11 +210,13 @@ def model_select(slug: str) -> ResponseReturnValue:
 # ---------------------------------------------------------------- results
 @bp.get("/api/results")
 def results() -> ResponseReturnValue:
+    """Inspection history."""
     return jsonify(list(system().results.history))
 
 
 @bp.get("/api/results/<rid>/<kind>.jpg")
 def result_image(rid: str, kind: str) -> ResponseReturnValue:
+    """Marked (overlay) or detail image of a result."""
     imgs = system().results.images.get(rid)
     if imgs is None or kind not in ("overlay", "detail"):
         return abort(404)
@@ -204,23 +225,27 @@ def result_image(rid: str, kind: str) -> ResponseReturnValue:
 
 @bp.post("/api/results/<rid>/feedback")
 def result_feedback(rid: str) -> ResponseReturnValue:
+    """Operator decision on a result (correct / within tolerance / actually defective)."""
     return ok(**system().feedback(rid, str(body().get("verdict", ""))))
 
 
 # ---------------------------------------------------------------- finish batch / archives
 @bp.get("/api/archives")
 def archives() -> ResponseReturnValue:
+    """Archives and the results not archived yet."""
     st = system().cfg.storage
     return jsonify({"archives": qa.list_archives(st.archive_dir), "pending": qa.summarize(st.results_dir)})
 
 
 @bp.post("/api/archives")
 def archive_create() -> ResponseReturnValue:
+    """Finishes the batch: results → ZIP archive, counters reset."""
     return ok(**system().archive_results(str(body().get("label", ""))))
 
 
 @bp.get("/api/archives/<name>")
 def archive_download(name: str) -> ResponseReturnValue:
+    """Downloads an archive."""
     try:
         path = qa.archive_path(system().cfg.storage.archive_dir, name)
     except qa.ArchiveError:

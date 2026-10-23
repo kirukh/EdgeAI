@@ -23,6 +23,8 @@ from .base import (
 
 
 class DiffMethod(Method):
+    """Reference image comparison: z-score map against the mean and spread image of the good parts."""
+
     name = "diff"
 
     def _rep(self, s: AlignedPart) -> np.ndarray:
@@ -40,6 +42,7 @@ class DiffMethod(Method):
         return z
 
     def fit(self, samples: list[AlignedPart], accepted: Collection[int] = ()) -> None:
+        """Mean and spread image of the good parts; threshold from leave-one-out; tolerance map of accepted parts."""
         normal, acc = split_accepted(len(samples), accepted)
         all_x = np.stack([self._rep(s) for s in samples])
         X = all_x[normal]
@@ -76,6 +79,7 @@ class DiffMethod(Method):
         return cv2.morphologyEx(b.astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
 
     def score(self, s: AlignedPart, sens: float = 1.0, mm_per_px: float | None = None) -> MethodResult:
+        """Regions whose z-score exceeds the threshold over at least the learned minimum area are defects."""
         sens = max(float(sens), 1e-3)
         z = self._zmap(self._rep(s), self.mean, self.std)
         zt = self.cfg.diff_z_threshold / sens
@@ -94,6 +98,7 @@ class DiffMethod(Method):
         return MethodResult(self.name, not defects, float(score), defects, heat)
 
     def state(self) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
+        """Mean, spread and region image, minimum area, accepted-deviation map."""
         return (
             {"min_area": self.min_area, "report": self.report},
             {"mean": self.mean, "std": self.std, "region": self.region}
@@ -101,6 +106,7 @@ class DiffMethod(Method):
         )
 
     def load_state(self, meta: dict[str, Any], arrays: dict[str, np.ndarray]) -> None:
+        """Restores mean, spread, region and minimum area."""
         self.min_area = meta["min_area"]
         self.report = meta.get("report", {})
         self.mean, self.std, self.region = arrays["mean"], arrays["std"], arrays["region"]

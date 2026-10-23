@@ -36,6 +36,7 @@ SECURITY_HEADERS = {
 
 
 def create_app(system: QCSystem) -> Flask:
+    """Flask app with both blueprints, request checks (CSRF, token), security headers and the page."""
     app = Flask(__name__, static_folder=None)
     auth = SetupAuth(system.cfg.ui)
     app.extensions["qc_system"] = system

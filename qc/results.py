@@ -54,6 +54,8 @@ def _append_csv(path: Path, header: list[str], row: list[Any]) -> None:
 
 
 class ResultStore:
+    """Inspection history, counters, supervisor feedback and the CSV logs of the day."""
+
     def __init__(self, cfg: StorageConfig, work_width: int = 640):
         self.cfg = cfg
         self.work_width = work_width
@@ -68,6 +70,7 @@ class ResultStore:
         Path(cfg.results_dir).mkdir(parents=True, exist_ok=True)
 
     def day_dir(self) -> Path:
+        """Results folder of today (created if needed)."""
         day = Path(self.cfg.results_dir) / datetime.now().strftime("%Y-%m-%d")
         day.mkdir(parents=True, exist_ok=True)
         return day
@@ -128,6 +131,7 @@ class ResultStore:
         )
 
     def entry(self, rid: str) -> dict[str, Any]:
+        """History entry of a result id (KeyError if it is no longer in the history)."""
         entry = next((h for h in self.history if h["image_id"] == rid), None)
         if entry is None:
             raise ValueError("Result not found (only the recent history can be corrected).")
@@ -165,6 +169,7 @@ class ResultStore:
         return outcome
 
     def reset(self) -> None:
+        """New batch: counters and history are cleared."""
         self.counts = {"OK": 0, "NOK": 0, "NO_PART": 0}
         self.feedback_counts = {"false_alarm": 0, "missed": 0, "confirmed": 0}
         self.skipped = 0

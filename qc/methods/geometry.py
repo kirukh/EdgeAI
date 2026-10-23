@@ -27,6 +27,8 @@ from .base import (
 
 @dataclass
 class Hole:
+    """A hole or cut-out found in the aligned part (sub-pixel centre, area, equivalent diameter, shape)."""
+
     cx: float
     cy: float
     area: float
@@ -166,10 +168,13 @@ def _box_around(x: float, y: float, d: float) -> tuple[int, int, int, int]:
 
 
 class GeometryMethod(Method):
+    """Holes and outline against the nominal geometry learned from the good parts."""
+
     name = "geometry"
     outline_tolerated: np.ndarray | None = None  # outline deviations accepted by the operator (mask)
 
     def fit(self, samples: list[AlignedPart], accepted: Collection[int] = ()) -> None:
+        """Nominal holes and outline from the good parts, tolerances from their spread, screening of the references."""
         normal, acc = split_accepted(len(samples), accepted)
         detected = [find_holes(s, self.cfg.hole_min_area_px)[0] for s in samples]
         counts = [len(detected[i]) for i in normal]
@@ -294,6 +299,7 @@ class GeometryMethod(Method):
         return float(max(tol, self.d_accept[e]))
 
     def score(self, s: AlignedPart, sens: float = 1.0, mm_per_px: float | None = None) -> MethodResult:
+        """Matches the holes to the nominal ones and checks position, diameter, shape, missing/extra holes, outline."""
         sens = max(float(sens), 1e-3)
         holes, _ = find_holes(s, self.cfg.hole_min_area_px)
         pairs, un_e, un_d = _match(self.exp_xy, self.exp_d, holes)
@@ -403,6 +409,7 @@ class GeometryMethod(Method):
         return defects, largest / min_area
 
     def state(self) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
+        """Nominal holes, tolerances, accepted deviations and the outline mask."""
         meta = {"outline_min_area": self.outline_min_area, "report": self.report}
         arrays = {
             "exp_xy": self.exp_xy,
@@ -421,6 +428,7 @@ class GeometryMethod(Method):
         return meta, arrays
 
     def load_state(self, meta: dict[str, Any], arrays: dict[str, np.ndarray]) -> None:
+        """Restores the nominal geometry and tolerances."""
         self.outline_min_area = meta["outline_min_area"]
         self.report = meta.get("report", {})
         for k in ("exp_xy", "pos_std", "exp_d", "d_std", "exp_aspect", "hole_masks", "ref_filled"):

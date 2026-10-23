@@ -42,9 +42,11 @@ class CameraSource:
     continuous = True
 
     def read(self) -> np.ndarray | None:  # pragma: no cover - interface
+        """Next image (BGR) of the source, or None if none is available right now."""
         raise NotImplementedError
 
     def close(self) -> None:
+        """Releases the camera."""
         pass
 
     # ---- camera controls for the automatic camera setup (qc/autosetup.py) ----
@@ -55,24 +57,31 @@ class CameraSource:
     last_metadata: Mapping[str, Any] = MappingProxyType({})  # read-only default; sources set their own
 
     def set_exposure(self, exposure_us: int, gain: float) -> None:
+        """Fixed exposure time (µs) and analogue gain."""
         raise NotImplementedError
 
     def set_colour_gains(self, gains: Sequence[float] | None) -> None:
+        """Fixed white balance (red, blue gains); None keeps the current one."""
         pass
 
     def set_crop(self, crop: Sequence[float]) -> None:
+        """Digital zoom: sensor region (x, y, w, h as fractions of the full sensor) scaled to the output size."""
         raise NotImplementedError
 
     def awb_start(self) -> None:
+        """Starts the automatic white balance (camera setup measures it and then locks it)."""
         pass
 
     def awb_result(self) -> tuple[float, float] | None:
+        """White balance found by ``awb_start`` (red, blue gains), or None."""
         return None
 
     def set_lens(self, position: float) -> None:
+        """Moves the focus motor to a lens position (dioptres); no effect without a focus motor."""
         pass
 
     def af_start(self, window: Sequence[float]) -> None:
+        """Starts an autofocus run on a window (x, y, w, h as fractions of the current image)."""
         pass
 
     def af_state(self) -> tuple[str, float | None]:
@@ -81,6 +90,8 @@ class CameraSource:
 
 
 class PiCameraSource(CameraSource):
+    """Raspberry Pi camera (picamera2): fixed sensor mode, exposure and white balance, optional autofocus."""
+
     name = "Raspberry Pi camera"
 
     def __init__(self, cfg: CameraConfig):
@@ -166,9 +177,11 @@ class PiCameraSource(CameraSource):
             return 0, 0, w, h
 
     def set_exposure(self, exposure_us: int, gain: float) -> None:
+        """Pi camera: switches the automatic exposure off and sets exposure time and gain."""
         self.cam.set_controls({"AeEnable": False, "ExposureTime": int(exposure_us), "AnalogueGain": float(gain)})
 
     def set_colour_gains(self, gains: Sequence[float] | None) -> None:
+        """Pi camera: switches the automatic white balance off and sets the colour gains."""
         if gains:
             self.cam.set_controls({"AwbEnable": False, "ColourGains": (float(gains[0]), float(gains[1]))})
 
@@ -181,13 +194,16 @@ class PiCameraSource(CameraSource):
         self.crop = tuple(float(v) for v in crop)
 
     def awb_start(self) -> None:
+        """Pi camera: automatic white balance on."""
         self.cam.set_controls({"AwbEnable": True})
 
     def awb_result(self) -> tuple[float, float] | None:
+        """Pi camera: colour gains of the last frame's metadata."""
         g = self.last_metadata.get("ColourGains")
         return (round(float(g[0]), 3), round(float(g[1]), 3)) if g else None
 
     def set_lens(self, position: float) -> None:
+        """Pi camera with focus motor: manual focus at ``position`` dioptres."""
         if self.has_autofocus and position is not None:
             self.cam.set_controls({"AfMode": 0, "LensPosition": float(position)})  # 0 = manual
 
@@ -204,12 +220,14 @@ class PiCameraSource(CameraSource):
         self.cam.set_controls({"AfTrigger": 0})  # start
 
     def af_state(self) -> tuple[str, float | None]:
+        """Pi camera: autofocus state and lens position from the last frame's metadata."""
         st = self.last_metadata.get("AfState")
         pos = self.last_metadata.get("LensPosition")
         state = {2: "focused", 3: "failed"}.get(st, "scanning") if isinstance(st, int) else "scanning"
         return state, (float(pos) if pos is not None else None)
 
     def read(self) -> np.ndarray | None:
+        """Pi camera: newest frame (no buffered old frames); also measures its age from the sensor timestamp."""
         # picamera2 "RGB888" delivers BGR byte order – matches OpenCV directly.
         # queue=False: always a fresh frame, never one that waited in a buffer while the Pi was busy.
         # last_age_s = time since the sensor exposed it → exact timing of the reject pulse.
@@ -226,11 +244,14 @@ class PiCameraSource(CameraSource):
         return frame
 
     def close(self) -> None:
+        """Pi camera: stops and closes the camera."""
         self.cam.stop()
         self.cam.close()
 
 
 class OpenCVSource(CameraSource):
+    """USB camera (or video file / stream URL) via OpenCV."""
+
     name = "USB camera"
 
     def __init__(self, cfg: CameraConfig, device: str):
@@ -249,10 +270,12 @@ class OpenCVSource(CameraSource):
             self.cap.set(cv2.CAP_PROP_AUTO_WB, 0)
 
     def read(self) -> np.ndarray | None:
+        """USB camera: next frame, or None."""
         ok, frame = self.cap.read()
         return frame if ok else None
 
     def close(self) -> None:
+        """USB camera: releases the device."""
         self.cap.release()
 
 
@@ -272,9 +295,11 @@ class FolderSource(CameraSource):
 
     @property
     def current_file(self) -> Path:
+        """File of the image shown at the moment."""
         return self.files[(self.idx - 1) % len(self.files)] if self.idx else self.files[0]
 
     def next_part(self) -> np.ndarray | None:
+        """Next image of the folder (starts again at the first one unless ``loop`` is False)."""
         if self.idx >= len(self.files):
             if not self.loop:
                 return None
@@ -284,6 +309,7 @@ class FolderSource(CameraSource):
         return self.current
 
     def read(self) -> np.ndarray | None:
+        """Image folder: the current image (the folder advances with ``next_part``)."""
         time.sleep(0.05)
         return self.current
 
@@ -357,24 +383,30 @@ class SimulatorSource(CameraSource):
     NOMINAL = 4000.0
 
     def set_exposure(self, exposure_us: int, gain: float) -> None:
+        """Simulator: brightness scales with exposure × gain."""
         self.exposure = (float(exposure_us), float(gain))
 
     def set_crop(self, crop: Sequence[float]) -> None:
+        """Simulator: digital zoom on the simulated belt."""
         self.crop = tuple(float(v) for v in crop)
 
     def awb_result(self) -> tuple[float, float] | None:
+        """Simulator: the configured colour gains."""
         g = self.cfg.colour_gains
         return float(g[0]), float(g[1])
 
     def set_lens(self, position: float) -> None:
+        """Simulator: lens position 4.0 dioptres is sharp, anything else is blurred."""
         if self.has_autofocus and position is not None:
             self.defocus = 0.0 if abs(position - 4.0) < 0.05 else 2.0
 
     def af_start(self, window: Sequence[float]) -> None:
+        """Simulator: an autofocus run takes a few frames and then ends sharp."""
         if self.has_autofocus:
             self._af = 4  # "scanning" for a few frames
 
     def af_state(self) -> tuple[str, float | None]:
+        """Simulator: autofocus state and lens position."""
         if not self.has_autofocus:
             return "failed", None
         return ("scanning", None) if self._af else ("focused", 4.0)
@@ -392,6 +424,7 @@ class SimulatorSource(CameraSource):
 
     @property
     def current_defect(self) -> str | None:
+        """Defect of the simulated part in the image (None = good part) – the ground truth in the result log."""
         return self.part.defect
 
     def set_lighting(self, lighting: str) -> None:
@@ -401,6 +434,7 @@ class SimulatorSource(CameraSource):
         self._spawn()
 
     def read(self) -> np.ndarray | None:
+        """Simulator: renders the next frame of the conveyor (part position, lighting, exposure, zoom, focus)."""
         # Limit the frame rate so the simulator does not max out the CPU
         wait = 1.0 / max(1, self.cfg.fps) - (time.time() - self.last_time)
         if wait > 0:
@@ -439,6 +473,7 @@ class SimulatorSource(CameraSource):
 
 
 def open_camera(cfg: CameraConfig) -> CameraSource:
+    """Camera source for ``camera.source``: sim, pi, usb:<n> or folder:<path>."""
     src = cfg.source
     if src == "sim":
         return SimulatorSource(cfg)

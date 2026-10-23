@@ -23,6 +23,8 @@ from .base import (
 
 
 class PCAMethod(Method):
+    """Machine learning: PCA subspace of the good parts; the reconstruction error is the anomaly score."""
+
     name = "pca"
 
     def _vec(self, s: AlignedPart) -> tuple[np.ndarray, tuple[int, int]]:
@@ -58,6 +60,7 @@ class PCAMethod(Method):
         return rmap if self.accept_res is None else np.maximum(rmap - self.accept_res, 0)
 
     def fit(self, samples: list[AlignedPart], accepted: Collection[int] = ()) -> None:
+        """PCA basis of the good parts; threshold from leave-one-out; tolerance map of accepted parts."""
         normal, acc = split_accepted(len(samples), accepted)
         vecs = [self._vec(s) for s in samples]
         self.size = vecs[0][1]
@@ -91,6 +94,7 @@ class PCAMethod(Method):
         }
 
     def score(self, s: AlignedPart, sens: float = 1.0, mm_per_px: float | None = None) -> MethodResult:
+        """Reconstruction error map; regions above the threshold are ML anomalies."""
         v, _ = self._vec(s)
         rmap = self._effective(self._residual(v.ravel().astype(np.float32), self.mean, self.comps, self.size))
         thr = self.threshold / max(float(sens), 1e-3)
@@ -116,6 +120,7 @@ class PCAMethod(Method):
         return MethodResult(self.name, bool(score < 1.0), float(score), defects, heat)
 
     def state(self) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
+        """Mean, principal components, threshold and accepted-residual map."""
         return (
             {"threshold": self.threshold, "size": list(self.size), "report": self.report},
             {"mean": self.mean, "comps": self.comps}
@@ -123,6 +128,7 @@ class PCAMethod(Method):
         )
 
     def load_state(self, meta: dict[str, Any], arrays: dict[str, np.ndarray]) -> None:
+        """Restores mean, components and threshold."""
         self.threshold = meta["threshold"]
         self.size = tuple(meta["size"])
         self.report = meta.get("report", {})

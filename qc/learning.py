@@ -58,13 +58,16 @@ class LearningStore:
         return stem
 
     def stems(self, kind: str) -> list[str]:
+        """Names of the stored parts of one kind (pending or known_bad)."""
         folder = self.dir / kind
         return sorted(p.stem for p in folder.glob("*.json")) if folder.exists() else []
 
     def count(self, kind: str) -> int:
+        """Number of stored parts of one kind."""
         return len(self.stems(kind))
 
     def items(self, kind: str) -> list[tuple[str, np.ndarray, dict[str, Any]]]:
+        """Stored parts of one kind: (name, image, info)."""
         out = []
         for stem in self.stems(kind):
             img = cv2.imread(str(self.dir / kind / f"{stem}.png"))
@@ -79,6 +82,7 @@ class LearningStore:
         return p if p.parent == folder and p.is_file() else None
 
     def remove(self, kind: str, stems: list[str]) -> None:
+        """Removes stored parts (e.g. the operator changed their decision)."""
         for stem in stems:
             for ext in (".png", ".json"):
                 (self.dir / kind / f"{stem}{ext}").unlink(missing_ok=True)
@@ -102,9 +106,11 @@ class UpdateReport:
 
     @property
     def released(self) -> bool:
+        """Was the new version released (the release check passed)?"""
         return self.version_after is not None
 
     def to_dict(self) -> dict[str, Any]:
+        """Report as a plain dict (history entry, UI, logs)."""
         d = asdict(self)
         d.pop("used")
         d["released"] = self.released

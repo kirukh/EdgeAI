@@ -25,6 +25,8 @@ from .model_store import ModelStore
 
 
 class ModelImprovement:
+    """Continuous improvement: operator decisions → accepted and test parts → background update → release or reject."""
+
     def __init__(
         self,
         cfg: AppConfig,
@@ -148,6 +150,7 @@ class ModelImprovement:
 
     # ------------------------------------------------------------------ accepted parts
     def waiting(self, slug: str) -> list[dict[str, Any]]:
+        """Accepted parts waiting for the next update of a model (with their inspection info)."""
         return [{"name": stem, **info} for stem, _, info in LearningStore(self.models.path(slug)).items(PENDING)]
 
     def discard(self, slug: str, name: str) -> None:
@@ -187,5 +190,6 @@ class ModelImprovement:
         return []
 
     def state(self) -> dict[str, Any]:
+        """State for the UI: enabled, update threshold, update running, report of the last update."""
         lc = self.cfg.learning
         return {"enabled": lc.enabled, "update_after": lc.update_after, "running": self.running, "last": self.last}

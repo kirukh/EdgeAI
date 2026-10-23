@@ -78,6 +78,8 @@ PREVIEW_LABEL = {
 
 
 class QCSystem:
+    """Coordinates camera, trigger, teach-in, inspection and the components; owns the operating mode."""
+
     def __init__(self, cfg: AppConfig, camera: CameraSource):
         self.cfg = cfg
         self.camera = camera
@@ -139,6 +141,7 @@ class QCSystem:
 
     # ------------------------------------------------------------------ threads
     def start(self) -> None:
+        """Starts the camera thread and the inspection thread."""
         self._threads = [
             threading.Thread(target=self._camera_loop, name="qc-camera", daemon=True),
             threading.Thread(target=self._worker, name="qc-inspect", daemon=True),
@@ -147,6 +150,7 @@ class QCSystem:
             t.start()
 
     def stop(self) -> None:
+        """Stops the threads and closes the camera."""
         self._stop.set()
         for t in self._threads:
             t.join(timeout=3)
@@ -275,6 +279,7 @@ class QCSystem:
             self._inspect(model, shots)
 
     def manual_capture(self) -> None:
+        """Takes the next frame as a part (button in the UI, e.g. for a stopped belt)."""
         if self.mode not in ("learning", "inspecting"):
             raise ValueError("Manual capture is only available while teaching in or inspecting.")
         self._manual.set()
@@ -336,6 +341,7 @@ class QCSystem:
                     self.mode = "idle"
 
     def cancel_camera_setup(self) -> None:
+        """Ends the automatic camera setup; the camera returns to the active part's profile."""
         with self.lock:
             self.cam.pending_profile, self.cam.status = None, None
             if self.mode == "camera_setup":
@@ -343,6 +349,7 @@ class QCSystem:
             self.cam.apply(self.model.camera_profile if self.model else None, force=True)
 
     def set_focus_assist(self, on: bool) -> None:
+        """Switches the focus assistant (sharpness value in the live image) on or off."""
         self.cam.set_focus_assist(on)
 
     def set_belt_axis(self, axis: str) -> None:
@@ -412,11 +419,13 @@ class QCSystem:
             self.finish_learning()
 
     def undo_reference(self, index: int | None = None) -> None:
+        """Removes a reference image of the running teach-in (the last one or ``index``)."""
         with self.lock:
             i = self.teach.remove(index)
         self.log("info", f"Reference image {i + 1} removed.")
 
     def cancel_learning(self) -> None:
+        """Cancels the teach-in; the captured references are discarded."""
         with self.lock:
             self.mode = "idle"
             self.teach.clear()
@@ -427,6 +436,7 @@ class QCSystem:
         self.log("info", "Learning mode cancelled.")
 
     def finish_learning(self) -> None:
+        """Trains the model from the captured references in the background."""
         with self.lock:
             if self.mode != "learning":
                 raise ValueError("Learning mode is not active.")
@@ -476,6 +486,7 @@ class QCSystem:
 
     # ------------------------------------------------------------------ inspection
     def start_inspection(self, slug: str | None = None) -> None:
+        """Starts the inspection (optionally after selecting the part type ``slug``)."""
         if slug:
             self.select_model(slug)
         with self.lock:
@@ -486,6 +497,7 @@ class QCSystem:
         self.log("info", f"Inspection started with model “{self.model.name}”.")
 
     def stop_inspection(self) -> None:
+        """Stops the inspection."""
         with self.lock:
             self._burst = None
             if self.mode == "inspecting":
@@ -514,6 +526,7 @@ class QCSystem:
             self.cam.apply(model.camera_profile)
 
     def select_model(self, slug: str) -> None:
+        """Makes a saved part type the active one (camera profile included)."""
         model = self.models.load(slug)
         with self.lock:
             self._require_idle()
@@ -521,6 +534,7 @@ class QCSystem:
         self.log("info", f"Model “{model.name}” loaded.")
 
     def delete_model(self, slug: str) -> None:
+        """Deletes a part type (not while it is being inspected or updated)."""
         self.models.path(slug)  # "Model not found" before anything changes
         with self.lock:
             if self.improve.running:
@@ -533,6 +547,7 @@ class QCSystem:
         self.log("info", f"Model “{slug}” deleted.")
 
     def set_sensitivity(self, slug: str, values: dict[str, float]) -> dict[str, float]:
+        """Changes the sensitivity per method of a part type and saves it; returns the new values."""
         path = self.models.path(slug)
         with self.lock:
             model = self.model if self.model is not None and self.model.slug == slug else QCModel.load(path)
@@ -577,6 +592,7 @@ class QCSystem:
         return info
 
     def reset_counts(self) -> None:
+        """Resets counters and history (setup area)."""
         with self.lock:
             self.results.reset()
             self.trigger.moving_captures = 0
@@ -588,6 +604,7 @@ class QCSystem:
         part_type: str | None = None,
         any_angle: bool | None = None,
     ) -> None:
+        """Simulator settings from the setup area: lighting, defect rate, part type, any rotation."""
         cam = self.camera
         if not isinstance(cam, SimulatorSource):
             raise ValueError("Only available in the simulator.")
@@ -622,6 +639,7 @@ class QCSystem:
         return out
 
     def status(self) -> dict[str, Any]:
+        """Complete state for the UI (polled about once a second)."""
         m, fa, r = self.model, self.cam.focus, self.results
         return {
             "mode": self.mode,

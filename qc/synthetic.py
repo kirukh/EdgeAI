@@ -97,6 +97,8 @@ DEFECT_LABELS = {
 
 @dataclass
 class PartInstance:
+    """A synthetic part: outline, holes and optional surface defects in local coordinates."""
+
     type_name: str
     outline: np.ndarray  # outline polygon (local coordinates)
     holes: list[dict[str, Any]]  # through holes
@@ -110,6 +112,7 @@ class PartInstance:
 
 
 def make_part(type_name: str = "A", defect: str | None = None, rng: np.random.Generator | None = None) -> PartInstance:
+    """Synthetic part of a type, optionally with one defect (see ``DEFECTS``), with small natural variation."""
     rng = rng or np.random.default_rng()
     spec = PART_TYPES[type_name]
     holes = copy.deepcopy(spec["holes"])
@@ -263,6 +266,7 @@ def render_layers(part: PartInstance, lighting: str, scale: float = 1.0) -> Laye
 
 
 def belt_background(size: tuple[int, int], lighting: str, rng: np.random.Generator) -> np.ndarray:
+    """Belt or backlight background with slight noise."""
     w, h = size
     if lighting == "front":
         base = np.array([44, 46, 48], np.float32)

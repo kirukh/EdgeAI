@@ -29,6 +29,8 @@ from .model import QCModel, TrainingError
 
 @dataclass
 class EvalRow:
+    """One configuration of the evaluation: false-alarm rate, detection rate (overall and per defect), time."""
+
     config: str
     fpr: float
     recall: float
@@ -38,6 +40,7 @@ class EvalRow:
 
 
 def default_grid(base: MethodConfig) -> list[tuple[str, MethodConfig]]:
+    """Configurations compared by ``qc evaluate``: each method with several representations, plus combinations."""
     grid = [("geometry", replace(base, methods=["geometry"]))]
     for r in ["norm", "gray", "clahe", "edges", "canny", "binary", "lab_ab", "hsv_s"]:
         grid.append((f"diff[{r}]", replace(base, methods=["diff"], diff_representation=r)))
@@ -72,6 +75,7 @@ def load_labeled_folder(test_dir: str | Path) -> list[tuple[np.ndarray, str]]:
 
 
 def load_folder(folder: str | Path) -> list[np.ndarray]:
+    """All images of a folder (recursively, sorted by name)."""
     return [read_image(p) for p in sorted(Path(folder).rglob("*")) if p.suffix.lower() in IMAGE_EXT]
 
 
@@ -82,6 +86,7 @@ def evaluate(
     loc: LocalizationConfig | None = None,
     progress: Callable[[str], object] | None = print,
 ) -> list[EvalRow]:
+    """Trains every configuration of ``grid`` on ``train`` and measures it on the labelled ``test`` images."""
     loc = loc or LocalizationConfig()
     labels = sorted({lbl for _, lbl in test if lbl != "ok"})
     rows = []
@@ -115,6 +120,7 @@ def evaluate(
 
 
 def to_markdown(rows: list[EvalRow], title: str = "") -> str:
+    """Evaluation table as Markdown."""
     labels = sorted({k for r in rows for k in r.per_defect})
     head = ["Configuration", "False alarms", "Detection (all)", *labels, "ms/part"]
     lines = [f"### {title}" if title else "", "", "| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
@@ -133,6 +139,7 @@ def to_markdown(rows: list[EvalRow], title: str = "") -> str:
 
 
 def to_csv(rows: list[EvalRow], path: str | Path, extra: dict[str, Any] | None = None) -> None:
+    """Appends the evaluation rows to a CSV file (header only for a new file)."""
     labels = sorted({k for r in rows for k in r.per_defect})
     path = Path(path)
     new = not path.exists()

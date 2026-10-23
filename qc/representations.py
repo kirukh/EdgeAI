@@ -91,10 +91,12 @@ REPRESENTATIONS: dict[str, tuple[str, Callable[[AlignedPart], np.ndarray]]] = {
 
 
 def compute(aligned: AlignedPart, name: str) -> np.ndarray:
+    """Image representation ``name`` of an aligned part (float32, roughly 0…1)."""
     if name not in REPRESENTATIONS:
         raise ValueError(f"Unknown representation '{name}'. Available: {', '.join(REPRESENTATIONS)}")
     return REPRESENTATIONS[name][1](aligned).astype(np.float32)
 
 
 def labels() -> dict[str, str]:
+    """Names of all representations for the UI and the evaluation."""
     return {k: v[0] for k, v in REPRESENTATIONS.items()}

@@ -44,6 +44,7 @@ def _ascii(text: str) -> str:
 
 
 def heat_overlay(img: np.ndarray, heat: np.ndarray, strength: float = 0.6) -> np.ndarray:
+    """Heat map (0…1) of a method laid over an image (red = large deviation)."""
     heat = np.clip(heat, 0, 1)
     color = cv2.applyColorMap((heat * 255).astype(np.uint8), cv2.COLORMAP_JET)
     alpha = (np.clip((heat - 0.35) / 0.65, 0, 1) * strength)[:, :, None]

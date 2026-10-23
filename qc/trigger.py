@@ -39,6 +39,7 @@ class PartTrigger:
         self.moving_captures = 0  # "still": parts that did not stop and were captured in motion
 
     def update(self, frame: np.ndarray) -> bool:
+        """Next frame; True if the picture of a part should be taken now."""
         small = resize_to_width(frame, self.cfg.detect_width)
         self.scale = frame.shape[1] / small.shape[1]
         det = detect_part(to_gray(small), self.loc)
@@ -79,9 +80,11 @@ class PartTrigger:
 
     @property
     def part_complete(self) -> bool:
+        """Is the last detected part completely in the image?"""
         return self.last_det is not None and self.last_det.complete
 
     def draw(self, img: np.ndarray) -> None:
+        """Draws the centre band and the detected part into the live image."""
         h, w = img.shape[:2]
         b = self.cfg.center_band_ratio
         color = (0, 200, 255) if self.armed else (120, 120, 120)

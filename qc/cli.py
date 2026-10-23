@@ -73,6 +73,7 @@ def _cfg(args: argparse.Namespace) -> AppConfig:
 
 
 def cmd_web(args: argparse.Namespace) -> None:
+    """``qc web``: starts the camera, the inspection system and the web UI."""
     from .camera import open_camera
     from .system import QCSystem
     from .web import create_app
@@ -93,6 +94,7 @@ def cmd_web(args: argparse.Namespace) -> None:
 
 
 def cmd_train(args: argparse.Namespace) -> None:
+    """``qc train``: teaches a part type from a folder of good-part images."""
     from .evaluate import load_folder
     from .model import QCModel
 
@@ -109,6 +111,7 @@ def cmd_train(args: argparse.Namespace) -> None:
 
 
 def cmd_inspect(args: argparse.Namespace) -> int:
+    """``qc inspect``: inspects images with a saved model; exit code 1 if a part is NOK."""
     from .model import QCModel
 
     cfg = _cfg(args)
@@ -133,6 +136,7 @@ def cmd_inspect(args: argparse.Namespace) -> int:
 
 
 def cmd_archive(args: argparse.Namespace) -> int:
+    """``qc archive``: zips all results and empties the results folder (batch finished)."""
     from . import archive as qa
 
     cfg = _cfg(args)
@@ -208,6 +212,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
 
 
 def cmd_generate(args: argparse.Namespace) -> None:
+    """``qc generate``: writes a synthetic test dataset (train/, test/ok, test/nok/<defect>)."""
     from .synthetic import generate_dataset
 
     out = generate_dataset(
@@ -217,6 +222,7 @@ def cmd_generate(args: argparse.Namespace) -> None:
 
 
 def cmd_evaluate(args: argparse.Namespace) -> None:
+    """``qc evaluate``: compares methods × representations on synthetic data or own photos."""
     from . import evaluate as E
 
     cfg = _cfg(args)
@@ -254,6 +260,7 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Command line entry point (``qc`` / ``python main.py``); returns the exit code."""
     p = argparse.ArgumentParser(prog="qc", description="AI-assisted quality inspection of metal parts (Raspberry Pi)")
     p.add_argument("--config", default="config.json", help="JSON configuration (optional)")
     sub = p.add_subparsers(dest="cmd", required=True)

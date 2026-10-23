@@ -34,6 +34,8 @@ METHOD_LABELS = {
 
 @dataclass
 class Defect:
+    """A defect found by a method, with its location on the canvas for the marking."""
+
     kind: str
     method: str
     bbox: tuple[int, int, int, int]  # x, y, w, h in canvas coordinates
@@ -43,9 +45,11 @@ class Defect:
 
     @property
     def label(self) -> str:
+        """Plain-language name of the defect type."""
         return DEFECT_LABELS.get(self.kind, self.kind)
 
     def to_dict(self) -> dict[str, Any]:
+        """Defect as a plain dict (log, UI)."""
         return {
             "kind": self.kind,
             "label": self.label,
@@ -59,6 +63,8 @@ class Defect:
 
 @dataclass
 class MethodResult:
+    """Result of one method for one image: OK/NOK, score (≥ 1 = NOK), defects and an optional heat map."""
+
     method: str
     ok: bool
     score: float  # ≥ 1.0 means NOK (normalised to the threshold)
@@ -69,6 +75,7 @@ class MethodResult:
     decisive: bool = False  # did this method contribute to the NOK decision?
 
     def to_dict(self) -> dict[str, Any]:
+        """Result as a plain dict (log, UI)."""
         return {
             "method": self.method,
             "label": METHOD_LABELS.get(self.method, self.method),
@@ -82,6 +89,7 @@ class MethodResult:
 
 
 def bbox_from_mask(mask: np.ndarray) -> tuple[int, int, int, int]:
+    """Bounding box (x, y, w, h) of the True pixels of a mask."""
     ys, xs = np.nonzero(mask)
     return int(xs.min()), int(ys.min()), int(xs.max() - xs.min() + 1), int(ys.max() - ys.min() + 1)
 
@@ -120,11 +128,14 @@ def robust_outliers(values: Sequence[float], floor: float, k: float, factor: flo
 
 
 def max_component_area(binary: np.ndarray) -> float:
+    """Area of the largest connected region (0 if there is none)."""
     n, _, stats, _ = cv2.connectedComponentsWithStats(binary.astype(np.uint8), connectivity=8)
     return float(np.max(stats[1:, cv2.CC_STAT_AREA])) if n > 1 else 0.0
 
 
 class Method:
+    """Interface of an inspection method: learn from good parts (``fit``), rate a part (``score``), save/load."""
+
     name = "base"
 
     def __init__(self, cfg: MethodConfig):
@@ -150,9 +161,11 @@ class Method:
         raise NotImplementedError
 
     def state(self) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
+        """What is saved with the model: (JSON-able settings, NumPy arrays)."""
         raise NotImplementedError
 
     def load_state(self, meta: dict[str, Any], arrays: dict[str, np.ndarray]) -> None:
+        """Restores the method from ``state()`` of a saved model."""
         raise NotImplementedError
 
 

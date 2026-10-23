@@ -51,6 +51,7 @@ METHODS: dict[str, type[Method]] = {"geometry": GeometryMethod, "diff": DiffMeth
 
 
 def create(name: str, cfg: MethodConfig) -> Method:
+    """Inspection method by name (``geometry``, ``diff`` or ``pca``)."""
     if name not in METHODS:
         raise ValueError(f"Unknown method '{name}'. Available: {', '.join(METHODS)}")
     return METHODS[name](cfg)

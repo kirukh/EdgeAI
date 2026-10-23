@@ -39,6 +39,8 @@ class _Attempts:
 
 @dataclass
 class SetupAuth:
+    """Setup PIN sessions, brute-force protection per client and the request checks (CSRF header, network token)."""
+
     ui: UIConfig
     network_token: str = field(default_factory=lambda: os.environ.get("QC_TOKEN", ""))
     _sessions: dict[str, float] = field(default_factory=dict)  # setup token → last activity
@@ -47,6 +49,7 @@ class SetupAuth:
 
     @property
     def pin_required(self) -> bool:
+        """Is a setup PIN configured?"""
         return bool(self.ui.setup_pin)
 
     def check_request(self, request: Request) -> str | None:
@@ -73,6 +76,7 @@ class SetupAuth:
             return bool(self._sessions)
 
     def unlocked(self, request: Request) -> bool:
+        """Does the request carry a valid setup session token (also renews the session)?"""
         if not self.pin_required:
             return True
         sent = request.headers.get("X-Setup-Token", "")
@@ -104,5 +108,6 @@ class SetupAuth:
             return token, "", 200
 
     def lock(self, token: str) -> None:
+        """Ends a setup session."""
         with self._guard:
             self._sessions.pop(token, None)

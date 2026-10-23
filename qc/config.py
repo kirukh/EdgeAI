@@ -15,6 +15,8 @@ from typing import Any
 
 @dataclass
 class CameraConfig:
+    """Camera source, resolution, exposure and white balance (plus the simulator settings)."""
+
     # "sim", "pi", "usb:0", "folder:/path/to/images"
     source: str = "sim"
     width: int = 1280
@@ -54,6 +56,8 @@ class CameraConfig:
 
 @dataclass
 class LocalizationConfig:
+    """Finding the part and bringing it into the normalised pose."""
+
     # "auto" detects whether the part is brighter or darker than the background
     polarity: str = "auto"  # "auto" | "bright" | "dark"
     min_part_area_ratio: float = 0.02  # minimum part area relative to the image
@@ -78,6 +82,8 @@ class LocalizationConfig:
 
 @dataclass
 class TriggerConfig:
+    """Conveyor trigger: when the picture of a part is taken."""
+
     # Capture as soon as the part is fully visible and inside the centre band
     center_band_ratio: float = 0.12
     # Conveyor direction: "x" (left↔right) or "y" (top↔bottom)
@@ -93,6 +99,8 @@ class TriggerConfig:
 
 @dataclass
 class MethodConfig:
+    """Inspection methods, their image representations and the decision rule."""
+
     # Enabled inspection methods (combined with OR → one method NOK = part NOK)
     methods: list[str] = field(default_factory=lambda: ["geometry", "diff", "pca"])
     # Image representation per method (see qc/representations.py)
@@ -145,6 +153,8 @@ class MethodConfig:
 
 @dataclass
 class StorageConfig:
+    """Where models, results and archives are stored, and which images are kept."""
+
     models_dir: str = "data/models"
     results_dir: str = "data/results"
     archive_dir: str = "data/archive"  # ZIP archives of finished batches
@@ -155,6 +165,8 @@ class StorageConfig:
 
 @dataclass
 class InspectionConfig:
+    """Several images per part and the majority vote."""
+
     # Always several images of the same part while it passes the camera, majority vote – random
     # false alarms (dust, a reflection, sensor noise) disappear. Fixed, minimum 3 (5 is possible).
     # To save time, the 2nd/3rd image is only evaluated when the 1st is not CLEARLY good.
@@ -165,6 +177,8 @@ class InspectionConfig:
 
 @dataclass
 class LearningConfig:
+    """Continuous improvement from the operator's decisions."""
+
     # Continuous improvement (qc/learning.py): the operator accepts NOK parts that are within the
     # company's tolerance ("Result wrong?"); the model learns these deviations as acceptable.
     enabled: bool = True
@@ -177,6 +191,8 @@ class LearningConfig:
 
 @dataclass
 class DriftConfig:
+    """Image-quality drift monitor."""
+
     window: int = 20  # parts in the rolling window
     contrast_tol: float = 0.15  # ±15 % contrast part ↔ belt (lighting ageing, exposure)
     background_tol: float = 20.0  # grey levels (ambient light, dirty belt/backlight)
@@ -186,6 +202,8 @@ class DriftConfig:
 
 @dataclass
 class AutoSetupConfig:
+    """Automatic camera setup."""
+
     # Automatic camera setup when a part type is taught in (see qc/autosetup.py)
     enabled: bool = True
     target_level: float = 225.0  # 99.5th percentile of part + surroundings after the setup
@@ -201,6 +219,8 @@ class AutoSetupConfig:
 
 @dataclass
 class UIConfig:
+    """Web UI: setup PIN, preview rate and quality."""
+
     # PIN for the setup area (sensitivity, models, focus assistant, archives, simulator).
     # The supervisor screen needs no PIN. "" = setup area without PIN. CHANGE THE DEFAULT.
     setup_pin: str = "1234"
@@ -211,6 +231,8 @@ class UIConfig:
 
 @dataclass
 class AppConfig:
+    """Complete configuration (``config.json``); unknown keys and invalid values are reported, not ignored."""
+
     camera: CameraConfig = field(default_factory=CameraConfig)
     localization: LocalizationConfig = field(default_factory=LocalizationConfig)
     trigger: TriggerConfig = field(default_factory=TriggerConfig)
@@ -228,6 +250,7 @@ class AppConfig:
     path: str = field(default="", repr=False)
 
     def to_dict(self) -> dict[str, Any]:
+        """Configuration as a plain dict (without the internal fields)."""
         d = asdict(self)
         d.pop("ignored")
         d.pop("path")
@@ -247,6 +270,7 @@ class AppConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AppConfig:
+        """Configuration from a dict (sections of version 1 are dropped and listed in ``ignored``), validated."""
         data = dict(data)
         ignored = sorted(k for k in REMOVED_SECTIONS if data.pop(k, None) is not None)
         data.pop("ignored", None)
@@ -258,6 +282,7 @@ class AppConfig:
 
     @classmethod
     def load(cls, path: str | Path | None) -> AppConfig:
+        """Configuration from a JSON file (defaults if it does not exist); the file is kept for ``persist``."""
         if path is None or not Path(path).exists():
             cfg = cls()
         else:
@@ -316,6 +341,8 @@ class AppConfig:
 
 
 class ConfigError(ValueError):
+    """Invalid configuration – the message names the setting and the allowed values."""
+
     pass
 
 

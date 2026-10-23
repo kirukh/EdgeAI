@@ -50,11 +50,15 @@ PREVIOUS = "previous"  # the version before the last update (one-step undo)
 
 
 class TrainingError(RuntimeError):
+    """Training not possible (too few usable references, unsupported model) – the message is shown to the user."""
+
     pass
 
 
 @dataclass
 class InspectionResult:
+    """Inspection result of one image (or the majority vote of several) with defects, scores and marked images."""
+
     status: str  # "OK" | "NOK" | "NO_PART"
     model: str
     timestamp: str
@@ -72,9 +76,11 @@ class InspectionResult:
 
     @property
     def ok(self) -> bool:
+        """True if the part is OK."""
         return self.status == "OK"
 
     def to_dict(self) -> dict[str, Any]:
+        """Result as a plain dict (history, log, UI) – without the images."""
         return {
             "status": self.status,
             "model": self.model,
@@ -91,6 +97,7 @@ class InspectionResult:
 
 
 def standalone_levels(cfg: MethodConfig) -> dict[str, float]:
+    """Score above which a method decides NOK on its own (fusion rule)."""
     return {"geometry": cfg.geometry_standalone, "diff": cfg.diff_standalone, "pca": cfg.pca_standalone}
 
 
@@ -146,6 +153,7 @@ def measure(a: AlignedPart) -> dict[str, float]:
 
 
 def slugify(name: str) -> str:
+    """File-system safe name of a part type (folder name of the model)."""
     s = re.sub(r"[^A-Za-z0-9_\-]+", "_", name.strip()).strip("_")
     return s or "model"
 
@@ -236,12 +244,16 @@ def _training_report(
 
 @dataclass
 class ChannelAnalysis:
+    """Aligned part and the results of all methods for one image (before the decision)."""
+
     aligned: AlignedPart
     results: list[M.MethodResult]
     measurements: dict[str, float]
 
 
 class QCModel:
+    """A taught part type: alignment reference, inspection methods, sensitivity, camera profile, versions."""
+
     def __init__(self, name: str, loc_cfg: LocalizationConfig, method_cfg: MethodConfig):
         self.name = name
         self.loc_cfg = loc_cfg
@@ -271,6 +283,7 @@ class QCModel:
 
     @property
     def slug(self) -> str:
+        """Folder name of the model."""
         return self.path.name if self.path else slugify(self.name)
 
     # ------------------------------------------------------------------ learning
@@ -367,6 +380,7 @@ class QCModel:
 
     # ------------------------------------------------------------------ inspection
     def align(self, frame: np.ndarray) -> AlignedPart | None:
+        """Finds the part in a frame and aligns it to the reference (None if no complete part is visible)."""
         work, det = _prepare(frame, self.loc_cfg)
         if det is None or not det.complete:
             return None
@@ -494,6 +508,7 @@ class QCModel:
 
     @classmethod
     def load(cls, path: str | Path) -> QCModel:
+        """Loads a saved model (also models of version 1 and 2.0)."""
         path = Path(path)
         extra: dict[str, Any] = {}
         if (path / "recipe.json").exists():  # saved by the full version (format 3)
@@ -533,6 +548,7 @@ class QCModel:
         return model
 
     def reference_frames(self) -> list[np.ndarray]:
+        """The reference images the model was trained with."""
         if self._ref_frames is not None:
             return list(self._ref_frames)
         if self._refs_dir is None or not self._refs_dir.exists():
@@ -584,6 +600,7 @@ class QCModel:
         return out
 
     def summary(self) -> dict[str, Any]:
+        """Short description for the UI (name, references, methods, sensitivity, version)."""
         return {
             "name": self.name,
             "slug": self.slug,
@@ -604,6 +621,7 @@ class QCModel:
 
 
 def has_previous(path: Path) -> bool:
+    """Has the model a previous version (undo of the last update possible)?"""
     return (path / PREVIOUS / "meta.json").exists()
 
 
@@ -635,6 +653,7 @@ def model_path(models_dir: str | Path, slug: str) -> Path | None:
 
 
 def list_models(models_dir: str | Path) -> list[dict[str, Any]]:
+    """Summaries of all models in ``models_dir`` (unreadable folders are skipped)."""
     out = []
     for p in sorted(Path(models_dir).glob("*")):
         if p.suffix in (".tmp", ".old", ".swap") or model_path(models_dir, p.name) is None:
