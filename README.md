@@ -346,7 +346,8 @@ qc/camera.py               Pi camera, USB, image folder, simulator
 qc/trigger.py              conveyor trigger (one capture per part)
 qc/alignment.py            localisation, alignment, photometric normalisation
 qc/representations.py      image representations (gray, CLAHE, edges, threshold, LAB, HSV …)
-qc/methods.py              inspection methods geometry / diff / pca, reference screening per method
+qc/methods/                inspection methods with reference screening: base.py (results, interface), geometry.py,
+                           diff.py, pca.py
 qc/model.py                part type: training (with screening), inspection, fusion decision, save/load
 qc/inspection.py           several images per part, majority vote
 qc/visualize.py            defect marking, heatmap
@@ -358,12 +359,13 @@ qc/learning.py             continuous improvement: accepted parts, model update 
 qc/improvement.py          continuous improvement in operation: operator decisions → background update, undo
 qc/drift.py                image-quality drift monitor
 qc/archive.py              ZIP + summary of finished batches
+qc/model_store.py          model folders on disk: find, load, list, save, delete
 qc/system.py               coordination: threads, operating mode, components above
 qc/web/                    web UI: operator_api.py and setup_api.py (Flask blueprints), auth.py, static/
 qc/synthetic.py            synthetic parts with defects (simulator, tests)
 qc/evaluate.py             comparison of method × representation × lighting
 deploy/                    install.sh (installation + autostart), run.sh
-tests/                     pytest – 77 tests, incl. complete web workflows with the simulator and a
+tests/                     pytest – 83 tests, incl. complete web workflows with the simulator and a
                            stand-in for picamera2 to test the Pi camera code
 ```
 
@@ -373,10 +375,10 @@ tests/                     pytest – 77 tests, incl. complete web workflows wit
 |---|---|---|---|
 | PEP 8 formatting | ruff format (Black style, 120 characters) | `ruff format qc tests main.py` | ✓ all files |
 | PEP 8 + bug patterns, import order, naming, complexity ≤ 15 | ruff (pycodestyle, pyflakes, bugbear, mccabe …) | `ruff check qc tests main.py` | ✓ 0 findings |
-| PEP 484 type hints | mypy | `mypy` | ✓ 0 errors |
-| PEP 257 docstrings | – | – | modules and public functions |
+| PEP 484 type hints | mypy, strict mode (every function annotated, no implicit `Any`) | `mypy` | ✓ 0 errors |
+| PEP 257 docstrings | ruff (D1) | `ruff check qc tests main.py` | ✓ every module, class and public function/method |
 | PEP 621 project metadata | pyproject.toml | `pip install -e ".[dev]"` | ✓ |
-| Tests + coverage | pytest, pytest-cov, pytest-xdist (parallel) | `pytest --cov` | ✓ 77 tests, 94 %, ~45 s |
+| Tests + coverage | pytest, pytest-cov, pytest-xdist (parallel) | `pytest --cov` | ✓ 83 tests, 94 %, ~45 s |
 | Continuous integration | GitHub Actions, Python 3.11 + 3.13 | `.github/workflows/ci.yml` | all rows above on every pull request |
 
 All rules are configured in `pyproject.toml`; the exceptions are commented there (e.g. upper-case `H, W, K` for
@@ -384,6 +386,7 @@ matrices in image processing, and `int(round(x))`, which is needed with NumPy 1.
 The tests run in parallel (one process per CPU core); `pytest -n 0` runs them one after another, e.g. for debugging.
 
 Design principles: **one responsibility per module** (the former 700-line `QCSystem` with three mixins is now a
-coordinator plus small components), **composition instead of mixins**, **pure functions where possible**
+coordinator plus small components: `CameraSetup`, `ModelStore`, `ModelImprovement`, …; the three inspection methods
+have one module each), **composition instead of mixins**, **pure functions where possible**
 (`vote`, `decide`, `autosetup`) because they are easy to test, and **KISS/YAGNI** – features that the task does not
 need were removed instead of being kept "just in case".

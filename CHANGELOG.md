@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.2.0 – code quality: refactoring, strict types, docstrings (2026-10-23)
+
+No change to the inspection: a golden master of 428 parts (4 synthetic scenarios incl. any rotation and backlight,
+both stop-and-go videos, save/load and a model update with release check) gives identical results – status,
+defects and every method score – before and after every step.
+
+- **Double work removed:** the outline check and the image comparison found the regions of the same image twice
+  (`connectedComponentsWithStats` for the defects and again for the largest region) – now one pass. Measured gain is
+  small (≈ 1.5 % per image, 14.9 → 14.7 ms on a PC, single thread): these were the cheap calls; most of the time
+  stays in the alignment (≈ 64 %), which was already optimised – `rotation_search: "flip"` is the big lever there.
+- **Structure:** `qc/methods.py` (810 lines) → package `qc/methods/` (`base`, `geometry`, `diff`, `pca`), public
+  names unchanged. `qc/model_store.py` (`ModelStore`): finding, loading, listing, saving and deleting models – one
+  place for "Model not found" instead of five copies. `system.py`: `_require_idle()` instead of six copies of the
+  idle check, the operator notices as a table of conditions, trigger polling split into belt and image folder.
+- **Dead code removed:** `SimulatorSource.MM_PER_PX`, `MODES`, an unused argument of `_rim_edge`.
+- **Types:** `mypy --strict` was at 300 findings (133 functions without annotations, 73 generic types without
+  element types) – now 0, and `strict = true` in `pyproject.toml`, so CI keeps it that way.
+- **Docstrings:** 213 added – every module, class and public function/method (PEP 257); ruff checks it (`D1`).
+- `body()` of the web API returns `{}` for a JSON body that is not an object (was an error 500).
+- README: standards table and project structure updated.
+
 ## 2.1.7 – capture mode "still" for a stop-and-go belt (2026-10-21)
 
 - **`trigger.mode = "still"`**: the picture is taken only once the part has rested inside the centre band for
