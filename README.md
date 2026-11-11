@@ -241,6 +241,7 @@ guide in German: [`docs/INSTALL.de.md`](docs/INSTALL.de.md).
 cd ~/pi_qc
 bash deploy/install.sh                  # with autostart
 bash deploy/install.sh --no-autostart   # start by hand
+bash deploy/install.sh --usb            # USB camera instead of the Pi camera (e.g. Pi 5 + Logitech C310)
 bash deploy/install.sh --no-camera      # laptop: simulator / image folders only
 ```
 
@@ -298,6 +299,29 @@ Hardware notes: focus the v2 lens by hand (factory setting is far distance); the
 parts (≈ 24 ms readout) – identical for references and inspected parts at the same constant belt speed, so keep the
 belt speed constant between teach-in and inspection; run the browser on another device; use a 5.1 V / 2.5 A supply.
 
+### Raspberry Pi 5 + USB camera (Logitech C310)
+
+Install with `bash deploy/install.sh --usb` (no picamera2; installs `v4l-utils` for the camera controls).
+
+| Setting (`config.pi5_usb_c310.json`) | Value | Why |
+|---|---|---|
+| `camera.source` | `usb:0` | `/dev/video0` – which number: `v4l2-ctl --list-devices` (the entry *UVC Camera*) |
+| `camera.usb_capture`, `usb_format` | `[1280, 960]`, `MJPG` | The C310's full 4:3 frame; MJPG for the full frame rate (YUYV is uncompressed and slow at this size). |
+| `camera.width/height` | 640 × 480 | Every frame is scaled to the working size – the 2× margin is the room for the **digital zoom** of the automatic camera setup (`autosetup.max_zoom` 2.0: never upscaled). |
+| `camera.exposure_us` | 2000 | Manual exposure; the C310 counts in 100 µs steps (20). The automatic camera setup adjusts it. |
+| `camera.power_line_hz` | 50 | Mains frequency of the lighting: the C310 ships set to 60 Hz → flicker stripes under 50 Hz lamps. |
+| `camera.usb_white_balance_k` | 4000 | Fixed white balance (kelvin) – no colour drift between parts. |
+| `trigger.mode` | `still` | Stop-and-go belt: picture only when the part rests in the centre. |
+| `trigger.detect_width`, `ui.preview_fps` | 320, 10 | The Pi 5 has the computing power for it. |
+
+What the program does with a USB camera (`qc/usb_camera.py`): a grabber thread reads the camera all the time and keeps
+only the **newest** frame (USB cameras queue frames); exposure, gain, white balance, mains frequency and the automatic
+frame-rate reduction (`exposure_dynamic_framerate`, which the C310 ships switched on) are set with `v4l2-ctl` under
+the names the camera reports. Without v4l-utils the camera still runs, but cannot be adjusted automatically.
+The C310 has a **fixed focus** (no focus control) set for typical webcam distances; close to the belt the image can get
+soft – check it with the focus assistant and, if needed, mount the camera higher (the digital zoom compensates part of
+it).
+
 ## Security
 
 | Measure | Details |
@@ -342,7 +366,8 @@ main.py                    entry point (python main.py …) – the commands are
 pyproject.toml             dependencies and tool settings (pytest, coverage, ruff, mypy)
 .github/workflows/ci.yml   CI: format, lint, types and tests on every push to main and every pull request
 qc/config.py               all parameters (dataclasses, overridable via config.json, validated)
-qc/camera.py               Pi camera, USB, image folder, simulator
+qc/camera.py               camera interface, Pi camera, image folder, simulator
+qc/usb_camera.py           USB camera (UVC, e.g. Logitech C310): newest frame, software zoom, v4l2-ctl controls
 qc/trigger.py              conveyor trigger (one capture per part)
 qc/alignment.py            localisation, alignment, photometric normalisation
 qc/representations.py      image representations (gray, CLAHE, edges, threshold, LAB, HSV …)
@@ -365,7 +390,7 @@ qc/web/                    web UI: operator_api.py and setup_api.py (Flask bluep
 qc/synthetic.py            synthetic parts with defects (simulator, tests)
 qc/evaluate.py             comparison of method × representation × lighting
 deploy/                    install.sh (installation + autostart), run.sh
-tests/                     pytest – 83 tests, incl. complete web workflows with the simulator and a
+tests/                     pytest – 87 tests, incl. complete web workflows with the simulator and a
                            stand-in for picamera2 to test the Pi camera code
 ```
 
@@ -378,7 +403,7 @@ tests/                     pytest – 83 tests, incl. complete web workflows wit
 | PEP 484 type hints | mypy, strict mode (every function annotated, no implicit `Any`) | `mypy` | ✓ 0 errors |
 | PEP 257 docstrings | ruff (D1) | `ruff check qc tests main.py` | ✓ every module, class and public function/method |
 | PEP 621 project metadata | pyproject.toml | `pip install -e ".[dev]"` | ✓ |
-| Tests + coverage | pytest, pytest-cov, pytest-xdist (parallel) | `pytest --cov` | ✓ 83 tests, 94 %, ~45 s |
+| Tests + coverage | pytest, pytest-cov, pytest-xdist (parallel) | `pytest --cov` | ✓ 87 tests, 94 %, ~45 s |
 | Continuous integration | GitHub Actions, Python 3.11 + 3.13 | `.github/workflows/ci.yml` | all rows above on every pull request |
 
 All rules are configured in `pyproject.toml`; the exceptions are commented there (e.g. upper-case `H, W, K` for

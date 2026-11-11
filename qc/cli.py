@@ -84,7 +84,13 @@ def cmd_web(args: argparse.Namespace) -> None:
     if args.any_angle:
         cfg.camera.sim_any_angle = True
     log_file = _setup_logging(cfg)
-    system = QCSystem(cfg, open_camera(cfg.camera))
+    try:
+        camera = open_camera(cfg.camera)
+    except (RuntimeError, ImportError) as e:
+        hint = "  USB camera: is it plugged in? Which device is it – v4l2-ctl --list-devices – camera.source"
+        hint += ' in config.json, e.g. "usb:0".  Pi camera: rpicam-hello --list-cameras.'
+        raise SystemExit(f"Camera {cfg.camera.source!r} could not be opened: {e}\n{hint}") from None
+    system = QCSystem(cfg, camera)
     system.start()
     print(f"Web UI: http://{args.host}:{args.port}/  (camera: {system.camera.name}, log: {log_file})")
     try:

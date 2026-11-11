@@ -1,0 +1,32 @@
+{
+  "camera": {
+    "source": "usb:0",
+    "width": 640,
+    "height": 480,
+    "usb_capture": [1280, 960],
+    "usb_format": "MJPG",
+    "fps": 30,
+    "exposure_us": 2000,
+    "analogue_gain": 1.0,
+    "lock_white_balance": true,
+    "usb_white_balance_k": 4000,
+    "power_line_hz": 50
+  },
+  "localization": {
+    "work_width": 640,
+    "rotation_search": "full"
+  },
+  "trigger": {
+    "detect_width": 320,
+    "mode": "still"
+  },
+  "autosetup": {
+    "max_zoom": 2.0
+  },
+  "ui": {
+    "setup_pin": "1234",
+    "preview_fps": 10,
+    "preview_quality": 75
+  },
+  "target_reference_count": 15
+}

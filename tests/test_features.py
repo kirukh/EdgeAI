@@ -353,12 +353,14 @@ def test_csrf_and_security_headers(make_system):
 
 # ------------------------------------------------------------------ config + compatibility
 def test_config_validation_reports_typos_and_bad_values():
-    for f in ("config.example.json", "config.pi3_imx219.json"):
+    for f in ("config.example.json", "config.pi3_imx219.json", "config.pi5_usb_c310.json"):
         AppConfig.load(f)  # shipped files are valid
     with pytest.raises(ConfigError, match="exposure"):
         AppConfig.from_dict({"camera": {"exposure": 3000}})  # typo of exposure_us
     with pytest.raises(ConfigError, match=r"trigger\.axis"):
         AppConfig.from_dict({"trigger": {"axis": "z"}})
+    with pytest.raises(ConfigError, match="power_line_hz"):
+        AppConfig.from_dict({"camera": {"power_line_hz": 55}})
     with pytest.raises(ConfigError, match="shots_per_part"):
         AppConfig.from_dict({"inspection": {"shots_per_part": 1}})
 
@@ -600,3 +602,158 @@ def test_capture_mode_switch_via_setup_api(make_system, tmp_path):
     assert c.post("/api/trigger-mode", json={"mode": "still"}, headers=h).json["ok"]
     assert c.get("/api/status").json["trigger_mode"] == "still"
     assert AppConfig.load(tmp_path / "config.json").trigger.mode == "still"
+
+
+# ------------------------------------------------------------ USB camera (Logitech C310 on a Raspberry Pi 5)
+C310_CTRLS = """
+User Controls
+
+                     brightness 0x00980900 (int)    : min=0 max=255 step=1 default=128 value=128
+                       contrast 0x00980901 (int)    : min=0 max=255 step=1 default=32 value=32
+                     saturation 0x00980902 (int)    : min=0 max=255 step=1 default=32 value=32
+        white_balance_automatic 0x0098090c (bool)   : default=1 value=1
+                           gain 0x00980913 (int)    : min=0 max=255 step=1 default=64 value=64
+           power_line_frequency 0x00980918 (menu)   : min=0 max=2 default=2 value=2 (60 Hz)
+      white_balance_temperature 0x0098091a (int)    : min=0 max=10000 step=10 default=4000 value=4000 flags=inactive
+                      sharpness 0x0098091b (int)    : min=0 max=255 step=1 default=24 value=24
+         backlight_compensation 0x0098091c (int)    : min=0 max=1 step=1 default=0 value=0
+
+Camera Controls
+
+                  auto_exposure 0x009a0901 (menu)   : min=0 max=3 default=3 value=3 (Aperture Priority Mode)
+         exposure_time_absolute 0x009a0902 (int)    : min=1 max=10000 step=1 default=166 value=166 flags=inactive
+     exposure_dynamic_framerate 0x009a0903 (bool)   : default=0 value=1
+"""
+
+
+class FakeV4L2:
+    """Stand-in for v4l2-ctl: answers --list-ctrls, records --set-ctrl."""
+
+    def __init__(self, listing=C310_CTRLS, missing=False):
+        self.listing, self.missing, self.sets = listing, missing, []
+
+    def __call__(self, cmd, **kw):
+        import types
+
+        if self.missing:
+            raise FileNotFoundError("v4l2-ctl")
+        if "--set-ctrl" in cmd:
+            name, value = cmd[-1].split("=")
+            self.sets.append((name, int(value)))
+        return types.SimpleNamespace(returncode=0, stdout=self.listing)
+
+    def last(self, name):
+        return [v for n, v in self.sets if n == name][-1]
+
+
+class FakeCapture:
+    """Stand-in for cv2.VideoCapture of a 1280 × 960 camera at ~100 fps; pixel value = column // 8."""
+
+    def __init__(self, *args):
+        self.props, self.n, self.released = {}, 0, False
+        self.base = np.tile((np.arange(1280) // 8).astype(np.uint8)[None, :, None], (960, 1, 3))
+
+    def isOpened(self):  # noqa: N802 - name of the OpenCV interface
+        return True
+
+    def set(self, prop, value):
+        self.props[prop] = value
+        return True
+
+    def get(self, prop):
+        return {cv2.CAP_PROP_FRAME_WIDTH: 1280, cv2.CAP_PROP_FRAME_HEIGHT: 960, cv2.CAP_PROP_FPS: 30}.get(prop, 0)
+
+    def read(self):
+        time.sleep(0.01)
+        self.n += 1
+        frame = self.base.copy()
+        frame[0, 0] = self.n % 256  # frame counter
+        return True, frame
+
+    def release(self):
+        self.released = True
+
+
+def _usb(cfg, v4l2):
+    from qc.usb_camera import USBCameraSource, V4L2Controls
+
+    return USBCameraSource(cfg, "0", FakeCapture, lambda dev: V4L2Controls(dev, run=v4l2))
+
+
+def test_usb_camera_settings_for_the_c310():
+    """Pi 5 + C310: 1280 × 960 MJPG recorded, exposure in 100 µs units, no automatic frame-rate reduction,
+    50 Hz against flicker, white balance fixed; the automatic camera setup can control it."""
+    from qc.config import CameraConfig
+
+    v4l2 = FakeV4L2()
+    cam = _usb(CameraConfig(source="usb:0", width=640, height=480, usb_capture=[1280, 960], exposure_us=2000), v4l2)
+    try:
+        assert cam.can_control and cam.path == "/dev/video0" and "1280×960 MJPG" in cam.info
+        assert cam.cap.props[cv2.CAP_PROP_FRAME_WIDTH] == 1280 and cam.cap.props[cv2.CAP_PROP_BUFFERSIZE] == 1
+        assert cam.cap.props[cv2.CAP_PROP_FOURCC] == cv2.VideoWriter.fourcc(*"MJPG")
+        assert v4l2.last("power_line_frequency") == 1  # 50 Hz
+        assert v4l2.last("auto_exposure") == 1 and v4l2.last("exposure_dynamic_framerate") == 0
+        assert v4l2.last("exposure_time_absolute") == 20 and v4l2.last("gain") == 64  # 2 ms, gain ×1
+        assert v4l2.last("white_balance_automatic") == 0 and v4l2.last("white_balance_temperature") == 4000
+        cam.set_exposure(15000, 2.0)
+        assert v4l2.last("exposure_time_absolute") == 150 and v4l2.last("gain") == 128
+        cam.set_exposure(5_000_000, 9.0)  # clamped to the camera's ranges
+        assert v4l2.last("exposure_time_absolute") == 10000 and v4l2.last("gain") == 255
+        assert cam.exposure == (1_000_000, 9.0)
+    finally:
+        cam.close()
+    assert cam.cap.released
+
+
+def test_usb_camera_gives_the_newest_frame_and_zooms_in_software():
+    from qc.config import CameraConfig
+
+    cam = _usb(CameraConfig(source="usb:0", width=640, height=480, usb_capture=[1280, 960]), FakeV4L2())
+    try:
+        f1 = cam.read()
+        assert f1.shape == (480, 640, 3) and cam.last_age_s < 0.5
+        time.sleep(0.15)  # the camera delivered several frames meanwhile – only the newest counts
+        n_before = cam.cap.n
+        f2 = cam.read()
+        assert cam.cap.n - n_before <= 2 and f2 is not f1
+        cam.set_crop((0.25, 0.25, 0.5, 0.5))  # 2× zoom: 640 × 480 of the 1280 × 960 frame, no upscaling
+        z = cam.read()
+        assert z.shape == (480, 640, 3) and z[100, 1, 0] == 320 // 8 and z[100, 639, 0] == 959 // 8
+    finally:
+        cam.close()
+
+
+def test_usb_camera_without_v4l2_ctl_and_with_old_control_names():
+    from qc.config import CameraConfig
+    from qc.usb_camera import V4L2Controls
+
+    cam = _usb(CameraConfig(source="usb:0", exposure_us=2000), FakeV4L2(missing=True))
+    try:
+        assert not cam.can_control and "install v4l-utils" in cam.info
+        cam.set_exposure(1000, 1.0)  # nothing to control – no error
+        assert cam.cap.props[cv2.CAP_PROP_AUTO_EXPOSURE] == 1  # OpenCV's basic setting instead
+    finally:
+        cam.close()
+    old = C310_CTRLS.replace("auto_exposure", "exposure_auto").replace("exposure_time_absolute", "exposure_absolute")
+    old = old.replace("exposure_dynamic_framerate", "exposure_auto_priority")
+    ctl = V4L2Controls("/dev/video0", run=FakeV4L2(old))
+    assert ctl.has("exposure") and ctl.control("auto_exposure").name == "exposure_auto"
+    assert ctl.control("dynamic_fps").name == "exposure_auto_priority" and not ctl.has("focus_auto")
+
+
+def test_usb_source_plays_a_video_file(tmp_path):
+    """usb:<file> – e.g. a recorded belt video – runs through the same source (no camera controls)."""
+    from qc.camera import open_camera
+    from qc.config import CameraConfig
+
+    path = str(tmp_path / "belt.avi")
+    out = cv2.VideoWriter(path, cv2.VideoWriter.fourcc(*"MJPG"), 30, (320, 240))
+    for i in range(5):
+        out.write(np.full((240, 320, 3), 40 * i, np.uint8))
+    out.release()
+    cam = open_camera(CameraConfig(source=f"usb:{path}", width=160, height=120, fps=200))
+    try:
+        assert not cam.is_device and cam.ctl is None and not cam.can_control
+        assert cam.read().shape == (120, 160, 3)
+    finally:
+        cam.close()

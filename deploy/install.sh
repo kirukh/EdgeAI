@@ -4,17 +4,20 @@
 #   cd ~/pi_qc
 #   bash deploy/install.sh                   # install + autostart (service "qc")
 #   bash deploy/install.sh --no-autostart    # install only; start by hand
+#   bash deploy/install.sh --usb             # USB camera instead of the Pi camera (e.g. Pi 5 + Logitech C310)
 #   bash deploy/install.sh --no-camera       # e.g. on a laptop: simulator / image folders only
 #
 # Steps:
-#   1. checks Python (≥ 3.11) and the camera library picamera2 (only available via apt – it is
-#      pre-installed on Raspberry Pi OS). With sudo the system packages are installed via apt.
+#   1. checks Python (≥ 3.11) and the camera library: picamera2 for the Pi camera (only available via
+#      apt – pre-installed on Raspberry Pi OS), v4l-utils for a USB camera (exposure, white balance …).
+#      With sudo the system packages are installed via apt.
 #   2. creates the Python environment .venv – with access to the system packages (picamera2)
 #   3. installs what is still missing into .venv with pip (no sudo needed): OpenCV, SciPy, Flask,
 #      waitress – NumPy stays the system version, because picamera2 is built for it
 #      (Bookworm: NumPy 1.x, Trixie: NumPy 2.x).
 #      Only ready-made packages are used (never hours of compiling on the Pi).
-#   4. creates config.json from the Raspberry Pi 3 + Camera Module v2 preset and asks for the setup PIN
+#   4. creates config.json from a preset (Pi 3 + Camera Module v2, or with --usb Pi 5 + USB camera C310)
+#      and asks for the setup PIN
 #   5. autostart (unless --no-autostart): sudo → system service; without → user service or crontab
 #
 # The script can be run again at any time (e.g. after an update); it only does what is missing.
@@ -22,12 +25,13 @@
 set -euo pipefail
 
 NO_AUTOSTART=0
-NO_CAMERA=0
+CAMERA=pi                                 # pi | usb | none
 for arg in "$@"; do
   case "$arg" in
     --no-autostart) NO_AUTOSTART=1 ;;
-    --no-camera) NO_CAMERA=1 ;;
-    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+    --usb) CAMERA=usb ;;
+    --no-camera) CAMERA=none ;;
+    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
     *) echo "Unknown option: $arg (see --help)"; exit 2 ;;
   esac
 done
@@ -47,18 +51,30 @@ echo "== 1/5 Python and camera library"
 if [ $HAVE_SUDO = 1 ]; then
   # all from apt: ready-made packages that fit together (pip then has nothing left to install)
   PKGS="python3-venv python3-numpy python3-opencv python3-scipy python3-flask python3-waitress"
-  [ $NO_CAMERA = 0 ] && PKGS="python3-picamera2 $PKGS"
+  [ $CAMERA = pi ] && PKGS="python3-picamera2 $PKGS"
+  [ $CAMERA = usb ] && PKGS="v4l-utils $PKGS"
   sudo apt-get update -q
   # shellcheck disable=SC2086
   sudo apt-get install -y -q $PKGS
-elif [ $NO_CAMERA = 0 ] && ! "$PYTHON" -c "import picamera2" 2>/dev/null; then
+elif [ $CAMERA = pi ] && ! "$PYTHON" -c "import picamera2" 2>/dev/null; then
   fail "The camera library picamera2 is missing. It only exists as a system package – ask an administrator:
      sudo apt install python3-picamera2
-   (Without a Pi camera, e.g. on a laptop: bash deploy/install.sh --no-camera)"
+   (USB camera: bash deploy/install.sh --usb   –   without camera, e.g. on a laptop: --no-camera)"
+fi
+if [ $CAMERA = usb ]; then
+  command -v v4l2-ctl >/dev/null \
+    || echo "   !! v4l2-ctl missing – the USB camera runs, but exposure/white balance cannot be set.
+      Ask an administrator:  sudo apt install v4l-utils"
+  if ! id -nG "$RUN_USER" | grep -qw video; then
+    if [ $HAVE_SUDO = 1 ]; then sudo usermod -aG video "$RUN_USER"; echo "   $RUN_USER added to the group video (log in again)"
+    else echo "   !! $RUN_USER is not in the group video – the camera may not open:  sudo usermod -aG video $RUN_USER"; fi
+  fi
+  ls /dev/video* >/dev/null 2>&1 && command -v v4l2-ctl >/dev/null \
+    && v4l2-ctl --list-devices 2>/dev/null | grep -A1 -iE "uvc|usb|webcam" | sed 's/^/   /' || true
 fi
 "$PYTHON" -c "import venv, ensurepip" 2>/dev/null \
   || fail "Python cannot create environments – ask an administrator:  sudo apt install python3-venv"
-echo "   $("$PYTHON" --version)$([ $NO_CAMERA = 0 ] && echo ", picamera2 present")"
+echo "   $("$PYTHON" --version)$([ $CAMERA = pi ] && echo ", picamera2 present")"
 
 echo "== 2/5 Python environment .venv"
 # --system-site-packages: the environment also sees the system packages (picamera2 is not on pip).
@@ -84,7 +100,7 @@ for pair in cv2:opencv-python-headless scipy:scipy flask:flask waitress:waitress
 done
 if [ ${#MISSING[@]} -gt 0 ]; then
   echo "   installing into .venv: ${MISSING[*]}  (ready-made packages only, a few minutes)"
-  [ -n "$SYS_NUMPY" ] && echo "   keeping the system NumPy $SYS_NUMPY (picamera2 is built for it)"
+  [ -n "$SYS_NUMPY" ] && echo "   keeping the system NumPy $SYS_NUMPY$([ $CAMERA = pi ] && echo " (picamera2 is built for it)")"
   "$PY" -m pip install -q --only-binary=numpy,scipy,opencv-python-headless "${MISSING[@]}" "${NUMPY_PIN[@]}" \
     || fail "pip could not install ${MISSING[*]} as ready-made packages for this Pi
    ($("$PYTHON" --version), $(uname -m)${SYS_NUMPY:+, system NumPy $SYS_NUMPY}). Ask an administrator:
@@ -96,14 +112,14 @@ fi
 # registers the project in .venv (command "qc"); the code stays here – a new version just replaces the folder
 "$PY" -m pip install -q --no-deps -e . 2>/dev/null \
   || echo "   (command 'qc' not installed – start with: .venv/bin/python main.py …)"
-"$PY" - "$NO_CAMERA" "$SYS_NUMPY" <<'PY' || fail "The Python environment is not usable (see the message above)."
+"$PY" - "$CAMERA" "$SYS_NUMPY" <<'PY' || fail "The Python environment is not usable (see the message above)."
 import sys
 from importlib.metadata import version
 import cv2, flask, numpy, scipy, waitress  # noqa: F401
 import scipy.optimize  # noqa: F401 - used by the program; fails if SciPy and NumPy do not fit together
 print(f"   NumPy {numpy.__version__}, OpenCV {cv2.__version__}, SciPy {scipy.__version__}, Flask {version('flask')}")
-no_camera, sys_numpy = sys.argv[1], sys.argv[2]
-if no_camera == "0":
+camera, sys_numpy = sys.argv[1], sys.argv[2]
+if camera == "pi":
     import picamera2  # noqa: F401
     if sys_numpy and numpy.__version__.split(".")[0] != sys_numpy.split(".")[0]:
         sys.exit(f"   .venv uses NumPy {numpy.__version__}, the camera library is built for NumPy {sys_numpy}. Fix:\n"
@@ -112,7 +128,10 @@ PY
 
 echo "== 4/5 Configuration"
 if [ ! -f config.json ]; then
-  cp config.pi3_imx219.json config.json
+  PRESET=config.pi3_imx219.json
+  [ $CAMERA = usb ] && PRESET=config.pi5_usb_c310.json
+  cp "$PRESET" config.json
+  echo "   preset: $PRESET"
   PIN=""
   if [ -t 0 ]; then
     read -r -p "   Choose a PIN for the setup area (digits, e.g. 4711; empty = random): " PIN || true
@@ -132,7 +151,8 @@ fi
 "$PY" -c "from qc.config import AppConfig; AppConfig.load('config.json'); print('   config.json is valid')"
 
 CAMERA_ARG="--camera pi"
-[ $NO_CAMERA = 1 ] && CAMERA_ARG="--camera sim"
+[ $CAMERA = usb ] && CAMERA_ARG=""                 # the camera comes from config.json (e.g. usb:0)
+[ $CAMERA = none ] && CAMERA_ARG="--camera sim"
 if [ $NO_AUTOSTART = 1 ]; then
   echo "== Done (no autostart). Start by hand:"
   echo "     cd $DIR && .venv/bin/python main.py web $CAMERA_ARG      (stop with Ctrl+C)"
@@ -172,12 +192,13 @@ else
   # last resort without systemd user services: crontab @reboot + restart loop
   chmod +x deploy/run.sh
   if command -v crontab >/dev/null; then
-    (crontab -l 2>/dev/null | grep -v "deploy/run.sh" || true; echo "@reboot $DIR/deploy/run.sh") | crontab -
+    (crontab -l 2>/dev/null | grep -v "deploy/run.sh" || true; echo "@reboot $DIR/deploy/run.sh $CAMERA_ARG") | crontab -
     echo "   autostart via crontab @reboot (no systemd user services available)"
   else
     echo "   no autostart possible here – after a reboot start it with:  nohup $DIR/deploy/run.sh &"
   fi
-  pgrep -f "deploy/run.sh" >/dev/null || nohup "$DIR/deploy/run.sh" >/dev/null 2>&1 &
+  # shellcheck disable=SC2086
+  pgrep -f "deploy/run.sh" >/dev/null || nohup "$DIR/deploy/run.sh" $CAMERA_ARG >/dev/null 2>&1 &
   CTL=""; LOG="tail -n 50 $DIR/data/logs/console.log"
 fi
 sleep 8

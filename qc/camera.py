@@ -3,7 +3,8 @@
 Supported sources (``CameraConfig.source``):
 
 * ``pi``            – Raspberry Pi camera via picamera2 (libcamera), fixed exposure
-* ``usb:<index>``   – USB camera via OpenCV (also ``usb:/dev/video0`` or an RTSP URL)
+* ``usb:<index>``   – USB camera (UVC, e.g. Logitech C310), see ``usb_camera.py`` (also
+                      ``usb:/dev/video0``, a video file or a stream URL)
 * ``folder:<path>`` – plays back images from a folder (offline tests with real photos)
 * ``sim``           – simulated conveyor with synthetic parts
 """
@@ -50,7 +51,7 @@ class CameraSource:
         pass
 
     # ---- camera controls for the automatic camera setup (qc/autosetup.py) ----
-    # Sources that cannot be controlled (USB, image folder) keep these defaults.
+    # Sources that cannot be controlled (image folder, USB camera without v4l2-ctl) keep these defaults.
     can_control = False  # exposure / gain / crop can be set by software
     has_autofocus = False  # focus motor (e.g. Camera Module 3)
     crop: tuple[float, ...] = (0.0, 0.0, 1.0, 1.0)  # current sensor crop (x, y, w, h as fractions of the sensor)
@@ -247,36 +248,6 @@ class PiCameraSource(CameraSource):
         """Pi camera: stops and closes the camera."""
         self.cam.stop()
         self.cam.close()
-
-
-class OpenCVSource(CameraSource):
-    """USB camera (or video file / stream URL) via OpenCV."""
-
-    name = "USB camera"
-
-    def __init__(self, cfg: CameraConfig, device: str):
-        dev: int | str = int(device) if device.isdigit() else device
-        self.cap = cv2.VideoCapture(dev)
-        if not self.cap.isOpened():
-            raise RuntimeError(f"Could not open camera '{device}'")
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, cfg.width)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg.height)
-        self.cap.set(cv2.CAP_PROP_FPS, cfg.fps)
-        if cfg.exposure_us > 0:
-            # V4L2: 1 = manual exposure; unit depends on the driver (usually 100 µs)
-            self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
-            self.cap.set(cv2.CAP_PROP_EXPOSURE, cfg.exposure_us / 100.0)
-        if cfg.lock_white_balance:
-            self.cap.set(cv2.CAP_PROP_AUTO_WB, 0)
-
-    def read(self) -> np.ndarray | None:
-        """USB camera: next frame, or None."""
-        ok, frame = self.cap.read()
-        return frame if ok else None
-
-    def close(self) -> None:
-        """USB camera: releases the device."""
-        self.cap.release()
 
 
 class FolderSource(CameraSource):
@@ -480,7 +451,9 @@ def open_camera(cfg: CameraConfig) -> CameraSource:
     if src == "pi":
         return PiCameraSource(cfg)
     if src.startswith("usb:"):
-        return OpenCVSource(cfg, src[4:])
+        from .usb_camera import USBCameraSource  # imports this module
+
+        return USBCameraSource(cfg, src[4:])
     if src.startswith("folder:"):
         return FolderSource(src[7:])
     raise ValueError(f"Unknown camera source '{src}'")

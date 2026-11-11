@@ -1,6 +1,6 @@
 [project]
 name = "pi-qc"
-version = "2.2.0"
+version = "2.3.0"
 description = "Camera-based OK/NOK inspection of metal parts on a conveyor (Raspberry Pi)"
 readme = "README.md"
 requires-python = ">=3.11"

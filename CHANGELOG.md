@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.3.0 – Raspberry Pi 5 + USB camera (Logitech C310) (2026-11-11)
+
+- **USB camera source** `qc/usb_camera.py` (replaces the minimal OpenCV source):
+  - records in `camera.usb_capture` (C310: full 1280 × 960, `usb_format` MJPG) and scales every frame to the working
+    size `width × height`; the margin is used for the **digital zoom** of the automatic camera setup (software crop);
+  - a grabber thread keeps only the **newest** frame – USB cameras queue frames, the inspection never gets an old one;
+  - exposure (100 µs units), gain, fixed white balance (`usb_white_balance_k`), mains frequency (`power_line_hz`,
+    the C310 ships at 60 Hz) and the automatic frame-rate reduction are set with `v4l2-ctl` under the names the camera
+    reports (also the older kernel names); without v4l-utils the camera runs with OpenCV's basic settings;
+  - the **automatic camera setup** now also works with a USB camera (exposure, gain, zoom);
+  - `usb:<video file or URL>` is read through the same source (real-time playback, no controls).
+- `config.pi5_usb_c310.json`: preset for the Pi 5 + C310 (stop-and-go capture mode, detect width 320, zoom ≤ 2×).
+- `deploy/install.sh --usb`: no picamera2, installs v4l-utils, checks the group video, lists the USB cameras, uses the
+  preset; the autostart takes the camera from config.json (was always `--camera pi`). `deploy/run.sh` passes its
+  arguments on.
+- `qc web`: a camera that cannot be opened gives a clear message with what to check (was a Python traceback).
+- Removed `build/` (a packaging leftover committed by mistake in 2.2.0) and added it to `.gitignore`.
+- 4 new tests against a stand-in for the C310 (control list as the camera reports it) and a recorded video file.
+  The inspection is unchanged (golden master identical).
+
 ## 2.2.0 – code quality: refactoring, strict types, docstrings (2026-10-23)
 
 No change to the inspection: a golden master of 428 parts (4 synthetic scenarios incl. any rotation and backlight,

@@ -37,6 +37,14 @@ class CameraConfig:
     # Camera Module v2 (IMX219): [1640, 1232] = 2×2 binned, FULL field of view, less noise.
     # None = libcamera chooses (beware: 1920×1080 on the IMX219 is a CROP of the image centre).
     sensor_mode: list[int] | None = None
+    # USB camera (source "usb:<n>"): the camera records in usb_capture (e.g. the Logitech C310's full
+    # 1280 × 960) and the program scales it to width × height – the margin is used for the digital zoom.
+    # None = record directly in width × height. MJPG allows the full frame rate at high resolutions.
+    usb_capture: list[int] | None = None
+    usb_format: str = "MJPG"  # "MJPG" or "YUYV" (uncompressed, often only a few fps at full size)
+    usb_white_balance_k: int = 4000  # fixed colour temperature in kelvin (with lock_white_balance)
+    # Mains frequency of the lighting – the camera avoids flicker stripes: 50 (Europe), 60 (America), 0 = off
+    power_line_hz: int = 50
     # Scale for reporting dimensions in mm: millimetres per pixel of the working image
     # (localization.work_width) at the FULL field of view, i.e. without digital zoom (the zoom
     # of a part type is taken into account automatically). Measure it once: length of a part
@@ -321,6 +329,8 @@ class AppConfig:
         at_least("localization.work_width", self.localization.work_width, 160)
         one_of("localization.rotation_search", self.localization.rotation_search, ("full", "flip", "off"))
         one_of("localization.ecc_datum", self.localization.ecc_datum, ("auto", "outline", "all"))
+        one_of("camera.usb_format", self.camera.usb_format, ("MJPG", "YUYV"))
+        one_of("camera.power_line_hz", self.camera.power_line_hz, (0, 50, 60))
         one_of("trigger.axis", self.trigger.axis, ("x", "y"))
         one_of("trigger.mode", self.trigger.mode, ("pass", "still"))
         at_least("trigger.still_frames", self.trigger.still_frames, 2)

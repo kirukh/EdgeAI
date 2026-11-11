@@ -6,3 +6,4 @@ __pycache__/
 config.json
 *.egg-info/
 .coverage
+build/
