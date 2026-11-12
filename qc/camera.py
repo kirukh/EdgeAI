@@ -451,8 +451,11 @@ def open_camera(cfg: CameraConfig) -> CameraSource:
     if src == "pi":
         return PiCameraSource(cfg)
     if src.startswith("usb:"):
-        from .usb_camera import USBCameraSource  # imports this module
+        from .usb_camera import USBCameraSource, quiet_jpeg_warnings  # imports this module
 
+        dev = src[4:]
+        if cfg.usb_format.upper() == "MJPG" and (dev.isdigit() or dev.startswith("/dev/video")):
+            quiet_jpeg_warnings()
         return USBCameraSource(cfg, src[4:])
     if src.startswith("folder:"):
         return FolderSource(src[7:])

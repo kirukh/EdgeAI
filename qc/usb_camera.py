@@ -10,11 +10,16 @@
   properties mean different things in different OpenCV versions. Without v4l2-ctl the camera runs
   with OpenCV's basic settings and cannot be adjusted automatically.
 
+* Many UVC cameras (the C310 among them) pad their MJPG frames with a few bytes. libjpeg decodes the
+  frame correctly but prints "Corrupt JPEG data: N extraneous bytes before marker" for EVERY frame
+  straight to the process's stderr. ``quiet_jpeg_warnings`` filters exactly these lines and counts them.
+
 Video files and stream URLs (``usb:<file or URL>``) are read the same way, without camera controls.
 """
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import threading
@@ -109,6 +114,53 @@ class V4L2Controls:
         self.run(["v4l2-ctl", "-d", self.device, "--set-ctrl", f"{c.name}={v}"], capture_output=True, timeout=5)
         c.value = v
         return v
+
+
+class JpegWarningFilter:
+    """Routes file descriptor 2 (stderr) through a pipe and drops libjpeg's "Corrupt JPEG data"
+    lines – they come from C code, so Python's logging cannot filter them. Everything else is
+    passed on unchanged. Installed once per process (``quiet_jpeg_warnings``)."""
+
+    PATTERN = b"Corrupt JPEG data"
+
+    def __init__(self) -> None:
+        self.dropped = 0
+        self._out = os.dup(2)
+        read_fd, write_fd = os.pipe()
+        os.dup2(write_fd, 2)
+        os.close(write_fd)
+        self._in = os.fdopen(read_fd, "rb", buffering=0)
+        threading.Thread(target=self._pump, name="qc-stderr-filter", daemon=True).start()
+
+    def _pump(self) -> None:
+        buf = b""
+        try:
+            while chunk := self._in.read(4096):
+                buf += chunk
+                *lines, buf = buf.split(b"\n")
+                for line in lines:
+                    if self.PATTERN in line:
+                        self.dropped += 1
+                    else:
+                        os.write(self._out, line + b"\n")
+        finally:  # never leave stderr pointing at a pipe nobody reads
+            os.dup2(self._out, 2)
+            if buf:
+                os.write(self._out, buf)
+
+
+_jpeg_filter: JpegWarningFilter | None = None
+
+
+def quiet_jpeg_warnings() -> JpegWarningFilter | None:
+    """Hides libjpeg's harmless per-frame warnings for MJPG cameras (once per process)."""
+    global _jpeg_filter
+    if _jpeg_filter is None:
+        try:
+            _jpeg_filter = JpegWarningFilter()
+        except OSError:
+            return None
+    return _jpeg_filter
 
 
 class USBCameraSource(CameraSource):

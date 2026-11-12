@@ -9,6 +9,8 @@
   - exposure (100 µs units), gain, fixed white balance (`usb_white_balance_k`), mains frequency (`power_line_hz`,
     the C310 ships at 60 Hz) and the automatic frame-rate reduction are set with `v4l2-ctl` under the names the camera
     reports (also the older kernel names); without v4l-utils the camera runs with OpenCV's basic settings;
+  - libjpeg's per-frame warning "Corrupt JPEG data: N extraneous bytes before marker" (the C310 pads its MJPG
+    frames; the image is fine) is filtered from stderr and counted – it flooded the terminal;
   - the **automatic camera setup** now also works with a USB camera (exposure, gain, zoom);
   - `usb:<video file or URL>` is read through the same source (real-time playback, no controls).
 - `config.pi5_usb_c310.json`: preset for the Pi 5 + C310 (stop-and-go capture mode, detect width 320, zoom ≤ 2×).

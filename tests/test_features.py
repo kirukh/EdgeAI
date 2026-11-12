@@ -757,3 +757,21 @@ def test_usb_source_plays_a_video_file(tmp_path):
         assert cam.read().shape == (120, 160, 3)
     finally:
         cam.close()
+
+
+def test_jpeg_warning_filter_drops_only_libjpeg_lines():
+    """libjpeg writes its per-frame MJPG warnings straight to fd 2; only those lines are hidden."""
+    import subprocess
+    import sys
+
+    code = (
+        "import os, time\n"
+        "from qc.usb_camera import quiet_jpeg_warnings\n"
+        "f = quiet_jpeg_warnings()\n"
+        "os.write(2, b'Corrupt JPEG data: 4 extraneous bytes before marker 0xd7\\n' * 500)\n"
+        "os.write(2, b'real error\\n')\n"
+        "time.sleep(0.3)\n"
+        "print(f.dropped)\n"
+    )
+    res = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
+    assert res.stderr == "real error\n" and res.stdout.strip() == "500"
