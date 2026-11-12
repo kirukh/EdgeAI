@@ -20,11 +20,15 @@ import sys
 import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
 
 from .config import AppConfig, ConfigError
+
+if TYPE_CHECKING:
+    from flask import Flask
 
 
 def _setup_logging(cfg: AppConfig) -> Path:
@@ -43,7 +47,7 @@ def _setup_logging(cfg: AppConfig) -> Path:
     return log_dir / "qc.log"
 
 
-def _serve(app, host: str, port: int) -> None:
+def _serve(app: Flask, host: str, port: int) -> None:
     """waitress (production WSGI server, if installed) – otherwise Flask's built-in server."""
     try:
         from waitress import serve
@@ -53,7 +57,7 @@ def _serve(app, host: str, port: int) -> None:
     serve(app, host=host, port=port, threads=8, channel_timeout=60, ident=None)
 
 
-def _cfg(args) -> AppConfig:
+def _cfg(args: argparse.Namespace) -> AppConfig:
     cfg = AppConfig.load(args.config)
     if getattr(args, "camera", None):
         cfg.camera.source = args.camera
@@ -68,7 +72,8 @@ def _cfg(args) -> AppConfig:
     return cfg
 
 
-def cmd_web(args):
+def cmd_web(args: argparse.Namespace) -> None:
+    """``qc web``: starts the camera, the inspection system and the web UI."""
     from .camera import open_camera
     from .system import QCSystem
     from .web import create_app
@@ -79,7 +84,13 @@ def cmd_web(args):
     if args.any_angle:
         cfg.camera.sim_any_angle = True
     log_file = _setup_logging(cfg)
-    system = QCSystem(cfg, open_camera(cfg.camera))
+    try:
+        camera = open_camera(cfg.camera)
+    except (RuntimeError, ImportError) as e:
+        hint = "  USB camera: is it plugged in? Which device is it – v4l2-ctl --list-devices – camera.source"
+        hint += ' in config.json, e.g. "usb:0".  Pi camera: rpicam-hello --list-cameras.'
+        raise SystemExit(f"Camera {cfg.camera.source!r} could not be opened: {e}\n{hint}") from None
+    system = QCSystem(cfg, camera)
     system.start()
     print(f"Web UI: http://{args.host}:{args.port}/  (camera: {system.camera.name}, log: {log_file})")
     try:
@@ -88,7 +99,8 @@ def cmd_web(args):
         system.stop()
 
 
-def cmd_train(args):
+def cmd_train(args: argparse.Namespace) -> None:
+    """``qc train``: teaches a part type from a folder of good-part images."""
     from .evaluate import load_folder
     from .model import QCModel
 
@@ -104,7 +116,8 @@ def cmd_train(args):
         print("WARNING:", w)
 
 
-def cmd_inspect(args):
+def cmd_inspect(args: argparse.Namespace) -> int:
+    """``qc inspect``: inspects images with a saved model; exit code 1 if a part is NOK."""
     from .model import QCModel
 
     cfg = _cfg(args)
@@ -128,7 +141,8 @@ def cmd_inspect(args):
     return 1 if n_nok else 0
 
 
-def cmd_archive(args):
+def cmd_archive(args: argparse.Namespace) -> int:
+    """``qc archive``: zips all results and empties the results folder (batch finished)."""
     from . import archive as qa
 
     cfg = _cfg(args)
@@ -145,7 +159,7 @@ def cmd_archive(args):
     return 0
 
 
-def cmd_benchmark(args):
+def cmd_benchmark(args: argparse.Namespace) -> None:
     """Measures the time of every processing step – run it on the Raspberry Pi."""
     from . import synthetic as S
     from .alignment import align_part
@@ -203,7 +217,8 @@ def cmd_benchmark(args):
     print("Faster: smaller localization.work_width, rotation_search 'flip'/'off' for guided parts, fewer methods.")
 
 
-def cmd_generate(args):
+def cmd_generate(args: argparse.Namespace) -> None:
+    """``qc generate``: writes a synthetic test dataset (train/, test/ok, test/nok/<defect>)."""
     from .synthetic import generate_dataset
 
     out = generate_dataset(
@@ -212,7 +227,8 @@ def cmd_generate(args):
     print(f"Dataset created: {out}")
 
 
-def cmd_evaluate(args):
+def cmd_evaluate(args: argparse.Namespace) -> None:
+    """``qc evaluate``: compares methods × representations on synthetic data or own photos."""
     from . import evaluate as E
 
     cfg = _cfg(args)
@@ -250,11 +266,12 @@ def cmd_evaluate(args):
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Command line entry point (``qc`` / ``python main.py``); returns the exit code."""
     p = argparse.ArgumentParser(prog="qc", description="AI-assisted quality inspection of metal parts (Raspberry Pi)")
     p.add_argument("--config", default="config.json", help="JSON configuration (optional)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    def method_args(sp):
+    def method_args(sp: argparse.ArgumentParser) -> None:
         sp.add_argument("--methods", help="e.g. geometry,diff,pca")
         sp.add_argument("--diff-rep", help="image representation for the reference comparison")
         sp.add_argument("--pca-rep", help="image representation for the ML anomaly detection")

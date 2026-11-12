@@ -16,6 +16,7 @@ setup before the detection quality silently degrades.
 from __future__ import annotations
 
 from collections import deque
+from typing import Any
 
 import numpy as np
 
@@ -30,6 +31,8 @@ LABELS = {
 
 
 class DriftMonitor:
+    """Image quality (contrast, background, part size, sharpness) of the last parts compared with the learning phase."""
+
     def __init__(self, cfg: DriftConfig):
         self.cfg = cfg
         self.baseline: dict[str, float] = {}
@@ -41,6 +44,7 @@ class DriftMonitor:
         self.values = {k: deque(maxlen=self.cfg.window) for k in self.baseline}
 
     def update(self, measurements: dict[str, float]) -> None:
+        """Adds the measurements of one inspected part."""
         for k, v in measurements.items():
             if k in self.values:
                 self.values[k].append(v)
@@ -56,7 +60,7 @@ class DriftMonitor:
         bad = rel < -limit if key == "sharpness" else abs(rel) > limit  # sharper is never a problem
         return f"{rel * 100:+.1f} %", bad
 
-    def state(self) -> dict:
+    def state(self) -> dict[str, Any]:
         """Current deviations and warnings (only once at least half the window is filled)."""
         rows, warnings = [], []
         for k, ref in self.baseline.items():

@@ -2,13 +2,13 @@
 
 ``QCSystem`` coordinates the components and owns the operating mode; the work is done by them:
 
-    CameraSetup (camera_setup.py)  camera profiles, automatic camera setup, focus assistant
-    TeachIn     (teach.py)         reference images of a new part type
-    QCModel     (model.py)         training and inspection of one part type
-    inspect_part (inspection.py)   several images per part, majority vote
-    ResultStore (results.py)       history, counters, feedback, CSV logs
-    learning.py                    continuous improvement from the operator's decisions
-    DriftMonitor (drift.py)        image quality compared with the learning phase
+    CameraSetup      (camera_setup.py)  camera profiles, automatic camera setup, focus assistant
+    TeachIn          (teach.py)         reference images of a new part type
+    QCModel          (model.py)         training and inspection of one part type
+    inspect_part     (inspection.py)    several images per part, majority vote
+    ResultStore      (results.py)       history, counters, feedback, CSV logs
+    ModelImprovement (improvement.py)   continuous improvement from the operator's decisions
+    DriftMonitor     (drift.py)         image quality compared with the learning phase
 
 Two threads do the work, so the live image and the trigger never wait for an inspection::
 
@@ -16,19 +16,19 @@ Two threads do the work, so the live image and the trigger never wait for an ins
     worker thread:  ◄───────────────────────────┘ inspect_part() → results / drift monitor
 
 If the worker cannot keep up (queue full), the part is logged as not inspected and the
-supervisor gets a notice. The web UI (``qc/web``) only calls the public methods.
+supervisor gets a notice. The web UI (``qc/web``) only calls the public methods of the system
+and its components.
 """
 
 from __future__ import annotations
 
 import logging
 import queue
-import shutil
 import threading
 import time
 from collections import deque
 from datetime import datetime
-from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -39,15 +39,15 @@ from .camera import CameraSource, FolderSource, SimulatorSource
 from .camera_setup import CameraSetup
 from .config import AppConfig
 from .drift import DriftMonitor
+from .improvement import ModelImprovement
 from .inspection import inspect_part
-from .learning import KNOWN_BAD, PENDING, LearningStore, release, update_model
-from .model import MIN_REFERENCES, QCModel, has_previous, list_models, model_path, restore_previous
+from .model import MIN_REFERENCES, QCModel
+from .model_store import ModelStore
 from .results import OUTCOME_TEXT, ResultStore
 from .synthetic import PART_TYPES
 from .teach import TeachIn
 from .trigger import PartTrigger
 
-MODES = ("idle", "camera_setup", "learning", "training", "inspecting")
 PREVIEW_WIDTH = 640
 QUEUE_PARTS = 3  # parts waiting for inspection before new ones are not inspected
 MESSAGES_KEPT = 30
@@ -57,6 +57,17 @@ DRIFT_HINTS = {
     "background": "The belt / background brightness has changed. Check ambient light, clean the belt or backlight.",
     "area": "Parts look bigger or smaller than when taught. Has the camera been moved?",
 }
+NOTICE_NO_CAMERA = "No camera image. Check the camera cable and restart the device."
+NOTICE_SELECT_PART = "Select a part, or teach in a new part."
+NOTICE_NOT_SHARP = (
+    "The camera image is not sharp – the lens has to be focused once (setup technician). "
+    "Detection is less precise until then."
+)
+NOTICE_NOT_STOPPED = (
+    "{n} part(s) did not stop in the image centre and were photographed while moving. Check where the belt "
+    "stops, or switch the capture mode to “part passes through” (setup area)."
+)
+NOTICE_SKIPPED = "{n} part(s) could not be inspected because the system could not keep up. Slow the belt down."
 PREVIEW_LABEL = {
     "idle": "READY",
     "camera_setup": "ADJUSTING CAMERA",
@@ -67,13 +78,15 @@ PREVIEW_LABEL = {
 
 
 class QCSystem:
+    """Coordinates camera, trigger, teach-in, inspection and the components; owns the operating mode."""
+
     def __init__(self, cfg: AppConfig, camera: CameraSource):
         self.cfg = cfg
         self.camera = camera
         self.lock = threading.RLock()
         self.mode = "idle"
         self.model: QCModel | None = None
-        self.messages: deque[dict] = deque(maxlen=MESSAGES_KEPT)
+        self.messages: deque[dict[str, Any]] = deque(maxlen=MESSAGES_KEPT)
         self.trigger = PartTrigger(cfg.trigger, cfg.localization)
         self.teach = TeachIn(cfg.target_reference_count, cfg.localization)
         self.results = ResultStore(cfg.storage, cfg.localization.work_width)
@@ -88,13 +101,12 @@ class QCSystem:
         self._stop = threading.Event()
         self._manual = threading.Event()
         self._threads: list[threading.Thread] = []
-        self._jobs: queue.Queue = queue.Queue(maxsize=QUEUE_PARTS)
-        self._burst: dict | None = None
+        self._jobs: queue.Queue[tuple[list[np.ndarray], bool]] = queue.Queue(maxsize=QUEUE_PARTS)
+        self._burst: dict[str, Any] | None = None
         self._last_folder_step = 0.0
         self.folder_interval = 1.0
-        self._update_running = False  # a model update (learning.py) is being trained
-        self.last_update: dict | None = None
-        Path(cfg.storage.models_dir).mkdir(parents=True, exist_ok=True)
+        self.models = ModelStore(cfg.storage.models_dir)
+        self.improve = ModelImprovement(cfg, self.models, self.lock, lambda: self.model, self._set_model, self.log)
         for section in cfg.ignored:
             self.log("warn", f"config.json: section “{section}” belongs to the full version and is ignored.")
         if getattr(camera, "info", ""):
@@ -104,6 +116,11 @@ class QCSystem:
             f"System started – camera: {camera.name}"
             + (f", {cfg.camera.mm_per_px} mm/px" if cfg.camera.mm_per_px else ""),
         )
+
+    def _require_idle(self) -> None:
+        """Mode changes and settings that affect the camera only from idle (call under the lock)."""
+        if self.mode != "idle":
+            raise ValueError("Stop the current mode first.")
 
     def log(self, level: str, text: str) -> None:
         """Message for the UI (last 30) and the log file (``data/logs/qc.log``, see cli.py)."""
@@ -124,6 +141,7 @@ class QCSystem:
 
     # ------------------------------------------------------------------ threads
     def start(self) -> None:
+        """Starts the camera thread and the inspection thread."""
         self._threads = [
             threading.Thread(target=self._camera_loop, name="qc-camera", daemon=True),
             threading.Thread(target=self._worker, name="qc-inspect", daemon=True),
@@ -132,6 +150,7 @@ class QCSystem:
             t.start()
 
     def stop(self) -> None:
+        """Stops the threads and closes the camera."""
         self._stop.set()
         for t in self._threads:
             t.join(timeout=3)
@@ -173,29 +192,34 @@ class QCSystem:
     def _poll_trigger(self, frame: np.ndarray, t_capture: float) -> tuple[np.ndarray | None, bool]:
         """Was a part captured in this frame? → (image of the part or None, manual capture?)"""
         active = self.mode in ("learning", "inspecting")
-        part = None
-        if self.camera.continuous:
-            if self.trigger.update(frame) and active:
-                part = frame
-            if self.cam.path is not None and self.mode == "learning":
-                with self.lock:
-                    self.cam.track(frame, t_capture)
-            if self._burst is not None:
-                self._continue_burst(frame)
-        elif (
-            isinstance(self.camera, FolderSource)
-            and self.mode == "inspecting"
-            and time.time() - self._last_folder_step > self.folder_interval
-        ):
-            part = self.camera.next_part()  # image folder: one image per interval
-            self._last_folder_step = time.time()
+        part = self._poll_belt(frame, t_capture, active) if self.camera.continuous else self._poll_folder()
         manual = self._manual.is_set()
         if manual:
             self._manual.clear()
             if isinstance(self.camera, FolderSource) and self.mode == "learning":
-                frame = self.camera.next_part()
-            part = frame if active else None
+                part = self.camera.next_part() if active else None
+            else:
+                part = frame if active else None
         return part, manual
+
+    def _poll_belt(self, frame: np.ndarray, t_capture: float, active: bool) -> np.ndarray | None:
+        """Conveyor: the trigger decides; meanwhile the belt path is measured and burst shots collected."""
+        fired = self.trigger.update(frame)
+        if self.cam.path is not None and self.mode == "learning":
+            with self.lock:
+                self.cam.track(frame, t_capture)
+        if self._burst is not None:
+            self._continue_burst(frame)
+        return frame if fired and active else None
+
+    def _poll_folder(self) -> np.ndarray | None:
+        """Image folder: one image per interval while inspecting."""
+        if not isinstance(self.camera, FolderSource) or self.mode != "inspecting":
+            return None
+        if time.time() - self._last_folder_step <= self.folder_interval:
+            return None
+        self._last_folder_step = time.time()
+        return self.camera.next_part()
 
     def _on_part(self, frame: np.ndarray, manual: bool) -> None:
         """A part was triggered: during inspection collect further shots while it passes."""
@@ -255,6 +279,7 @@ class QCSystem:
             self._inspect(model, shots)
 
     def manual_capture(self) -> None:
+        """Takes the next frame as a part (button in the UI, e.g. for a stopped belt)."""
         if self.mode not in ("learning", "inspecting"):
             raise ValueError("Manual capture is only available while teaching in or inspecting.")
         self._manual.set()
@@ -286,8 +311,7 @@ class QCSystem:
     def start_camera_setup(self) -> None:
         """Step 1 of the automatic camera setup: ONE good part lies still under the camera."""
         with self.lock:
-            if self.mode != "idle":
-                raise ValueError("Stop the current mode first.")
+            self._require_idle()
             if not self.camera.can_control:
                 raise ValueError("This camera source cannot be adjusted automatically (Pi camera or simulator only).")
             self.mode = "camera_setup"
@@ -317,6 +341,7 @@ class QCSystem:
                     self.mode = "idle"
 
     def cancel_camera_setup(self) -> None:
+        """Ends the automatic camera setup; the camera returns to the active part's profile."""
         with self.lock:
             self.cam.pending_profile, self.cam.status = None, None
             if self.mode == "camera_setup":
@@ -324,14 +349,54 @@ class QCSystem:
             self.cam.apply(self.model.camera_profile if self.model else None, force=True)
 
     def set_focus_assist(self, on: bool) -> None:
+        """Switches the focus assistant (sharpness value in the live image) on or off."""
         self.cam.set_focus_assist(on)
+
+    def set_belt_axis(self, axis: str) -> None:
+        """Belt direction in the image – how the camera is mounted: "x" = left ↔ right (trigger bars
+        vertical), "y" = top ↕ bottom (camera turned by 90°, bars horizontal). Saved in config.json."""
+        if axis not in ("x", "y"):
+            raise ValueError("Belt direction must be x (left ↔ right) or y (top ↕ bottom).")
+        with self.lock:
+            self._require_idle()
+            self.cam.base_axis = axis
+            model = self.model
+            prof = model.camera_profile if model is not None else None
+            if model is not None and prof and prof.get("axis") not in (None, axis):
+                model.camera_profile = {**prof, "axis": axis}
+                model.save_meta()
+            self.cam.apply(model.camera_profile if model else None, force=True)
+        text = "left ↔ right (bars vertical)" if axis == "x" else "top ↕ bottom (bars horizontal)"
+        self._save_trigger_setting("axis", axis, f"Belt direction in the image: {text}")
+        if model is not None:
+            self.log("warn", f"If the camera was turned: teach “{model.name}” in again (references, zoom).")
+
+    def set_trigger_mode(self, mode: str) -> None:
+        """When the image is taken: "pass" = as the part crosses the image centre (continuous belt),
+        "still" = once it rests in the centre band (stop-and-go belt). Saved in config.json."""
+        if mode not in ("pass", "still"):
+            raise ValueError("Capture mode must be pass (part passes through) or still (part stops in the centre).")
+        with self.lock:
+            self._require_idle()
+            self.cfg.trigger.mode = mode
+            self.trigger.armed, self.trigger.prev_pos, self.trigger.moving_captures = True, None, 0
+            self.trigger.track.clear()
+        text = "while the part passes the centre" if mode == "pass" else "when the part rests in the centre"
+        self._save_trigger_setting("mode", mode, f"Capture {text}")
+
+    def _save_trigger_setting(self, key: str, value: str, text: str) -> None:
+        try:
+            saved = self.cfg.persist("trigger", key, value)
+        except OSError as e:
+            saved = False
+            self.log("warn", f"Setting could not be saved in the configuration: {e}")
+        self.log("ok", text + (" – saved." if saved else "."))
 
     # ------------------------------------------------------------------ teach-in
     def start_learning(self, name: str, auto_finish: bool = False) -> None:
         """``auto_finish``: create the model automatically once the target number of parts is reached."""
         with self.lock:
-            if self.mode != "idle":
-                raise ValueError("Stop the current mode first.")
+            self._require_idle()
             self.teach.start(name, auto_finish)
             self.mode = "learning"
             self.cam.begin_teach_in()
@@ -354,11 +419,13 @@ class QCSystem:
             self.finish_learning()
 
     def undo_reference(self, index: int | None = None) -> None:
+        """Removes a reference image of the running teach-in (the last one or ``index``)."""
         with self.lock:
             i = self.teach.remove(index)
         self.log("info", f"Reference image {i + 1} removed.")
 
     def cancel_learning(self) -> None:
+        """Cancels the teach-in; the captured references are discarded."""
         with self.lock:
             self.mode = "idle"
             self.teach.clear()
@@ -369,6 +436,7 @@ class QCSystem:
         self.log("info", "Learning mode cancelled.")
 
     def finish_learning(self) -> None:
+        """Trains the model from the captured references in the background."""
         with self.lock:
             if self.mode != "learning":
                 raise ValueError("Learning mode is not active.")
@@ -390,7 +458,7 @@ class QCSystem:
                 prof["sharp"] = edge <= self.cfg.autosetup.edge_width_max_px
             model.camera_profile = prof
             # a new teach-in starts fresh (no accepted parts of the old version); the old one can be restored
-            model.save(self.cfg.storage.models_dir, keep_previous=True, keep_side_data=False)
+            self.models.save(model, keep_previous=True, keep_side_data=False)
         except Exception as e:
             with self.lock:
                 self.mode = "learning"
@@ -418,24 +486,25 @@ class QCSystem:
 
     # ------------------------------------------------------------------ inspection
     def start_inspection(self, slug: str | None = None) -> None:
+        """Starts the inspection (optionally after selecting the part type ``slug``)."""
         if slug:
             self.select_model(slug)
         with self.lock:
             if self.model is None:
                 raise ValueError("No model selected.")
-            if self.mode != "idle":
-                raise ValueError("Stop the current mode first.")
+            self._require_idle()
             self.mode = "inspecting"
         self.log("info", f"Inspection started with model “{self.model.name}”.")
 
     def stop_inspection(self) -> None:
+        """Stops the inspection."""
         with self.lock:
             self._burst = None
             if self.mode == "inspecting":
                 self.mode = "idle"
                 self.log("info", "Inspection stopped.")
 
-    def _inspect(self, model: QCModel, shots: list[np.ndarray]) -> dict:
+    def _inspect(self, model: QCModel, shots: list[np.ndarray]) -> dict[str, Any]:
         """Inspects one part (outside the lock – the UI stays responsive) and records the result."""
         ic = self.cfg.inspection
         res, idx = inspect_part(model, shots, ic.confirm_margin, ic.tie_is_nok)
@@ -457,34 +526,29 @@ class QCSystem:
             self.cam.apply(model.camera_profile)
 
     def select_model(self, slug: str) -> None:
-        path = model_path(self.cfg.storage.models_dir, slug)
-        if path is None:
-            raise ValueError("Model not found.")
-        model = QCModel.load(path)
+        """Makes a saved part type the active one (camera profile included)."""
+        model = self.models.load(slug)
         with self.lock:
-            if self.mode != "idle":
-                raise ValueError("Stop the current mode first.")
+            self._require_idle()
             self._set_model(model)
         self.log("info", f"Model “{model.name}” loaded.")
 
     def delete_model(self, slug: str) -> None:
-        path = model_path(self.cfg.storage.models_dir, slug)
-        if path is None:
-            raise ValueError("Model not found.")
+        """Deletes a part type (not while it is being inspected or updated)."""
+        self.models.path(slug)  # "Model not found" before anything changes
         with self.lock:
-            if self._update_running:
+            if self.improve.running:
                 raise ValueError("A model update is running – try again in a moment.")
             if self.model is not None and self.model.slug == slug:
                 if self.mode == "inspecting":
                     raise ValueError("The active model cannot be deleted while inspection is running.")
                 self._set_model(None)
-            shutil.rmtree(path)
+            self.models.delete(slug)
         self.log("info", f"Model “{slug}” deleted.")
 
     def set_sensitivity(self, slug: str, values: dict[str, float]) -> dict[str, float]:
-        path = model_path(self.cfg.storage.models_dir, slug)
-        if path is None:
-            raise ValueError("Model not found.")
+        """Changes the sensitivity per method of a part type and saves it; returns the new values."""
+        path = self.models.path(slug)
         with self.lock:
             model = self.model if self.model is not None and self.model.slug == slug else QCModel.load(path)
             model.set_sensitivity(values)
@@ -493,154 +557,24 @@ class QCSystem:
         )
         return model.sensitivity
 
-    def list_models(self) -> list[dict]:
-        models = list_models(self.cfg.storage.models_dir)
-        for m in models:
-            path = Path(self.cfg.storage.models_dir) / m["slug"]
-            store = LearningStore(path)
-            m.update(waiting=store.count(PENDING), known_bad=store.count(KNOWN_BAD), has_previous=has_previous(path))
-        return models
-
     # ------------------------------------------------------------------ results
-    def feedback(self, rid: str, verdict: str) -> dict:
+    def feedback(self, rid: str, verdict: str) -> dict[str, Any]:
         """Supervisor confirms/corrects a result. "OK" on a NOK result = the part is within the
         company's tolerance → it is accepted and learned with the next model update."""
         with self.lock:
             outcome = self.results.feedback(rid, verdict)
-            learning = self._learn_from_feedback(self.results.entry(rid), outcome)
+            entry = self.results.entry(rid)
+            learning = self.improve.on_feedback(self.model, entry, self.results.frames.get(entry["image_id"]), outcome)
         text = "accepted as good (within tolerance)" if "waiting" in learning and outcome == "false_alarm" else None
         self.log(
             "warn" if outcome in ("false_alarm", "missed") else "info",
             f"Supervisor feedback for #{rid}: {text or OUTCOME_TEXT[outcome]}",
         )
         if learning.pop("start_update", False):
-            self._start_update(None, manual=False)
+            self.improve.start(None, manual=False)
         return {"outcome": outcome, **learning}
 
-    def _learn_from_feedback(self, entry: dict, outcome: str) -> dict:
-        """Accepted parts wait for the next update; confirmed defective parts become test parts
-        for its release check. Called under the lock."""
-        lc, model = self.cfg.learning, self.model
-        if not lc.enabled or model is None or model.path is None or model.name != entry["model"]:
-            return {}
-        store = LearningStore(model.path)
-        for kind in (PENDING, KNOWN_BAD):  # the supervisor changed their mind – drop the earlier decision
-            stem = entry.pop(f"{kind}_stem", None)
-            if stem:
-                store.remove(kind, [stem])
-        frame = self.results.frames.get(entry["image_id"])
-        if frame is None:
-            return {}
-        info = {
-            "image_id": entry["image_id"],
-            "inspected_at": entry["timestamp"],
-            "result": entry["status"],
-            "defects": sorted({d["label"] for d in entry["defects"]}),
-            "model_version": entry["model_version"],
-        }
-        if outcome == "false_alarm":
-            entry[f"{PENDING}_stem"] = store.add(PENDING, frame, info, lc.max_waiting)
-        elif outcome in ("missed", "confirmed_nok"):
-            entry[f"{KNOWN_BAD}_stem"] = store.add(KNOWN_BAD, frame, info, lc.max_known_bad)
-        waiting = store.count(PENDING)
-        start = outcome == "false_alarm" and 0 < lc.update_after <= waiting and not self._update_running
-        return {"waiting": waiting, "update_after": lc.update_after, "start_update": start}
-
-    # ------------------------------------------------------------------ continuous improvement
-    def update_model_now(self, slug: str) -> None:
-        """Button in the setup area: learn the waiting accepted parts now."""
-        path = model_path(self.cfg.storage.models_dir, slug)
-        if path is None:
-            raise ValueError("Model not found.")
-        if LearningStore(path).count(PENDING) == 0:
-            raise ValueError("No accepted parts are waiting for this model.")
-        self._start_update(slug, manual=True)
-
-    def _start_update(self, slug: str | None, manual: bool) -> None:
-        with self.lock:
-            if self._update_running:
-                if manual:
-                    raise ValueError("A model update is already running.")
-                return
-            model = self.model
-            if slug is not None and (model is None or model.slug != slug):
-                path = model_path(self.cfg.storage.models_dir, slug)
-                model = QCModel.load(path) if path is not None else None
-            if model is None or model.path is None:
-                raise ValueError("Model not found.")
-            self._update_running = True
-        threading.Thread(target=self._run_update, args=(model,), name="qc-model-update", daemon=True).start()
-
-    def _run_update(self, model: QCModel) -> None:
-        """Trains and checks a new version in the background – inspection keeps running."""
-        assert model.path is not None
-        store = LearningStore(model.path)
-        try:
-            new, report = update_model(model, store)
-            if new is not None:
-                with self.lock:
-                    active = self.model is not None and self.model.slug == model.slug
-                    if active and self.model is not None:  # sensitivity may have been changed meanwhile
-                        new.sensitivity = dict(self.model.sensitivity)
-                    release(new, store, report)
-                    if active:
-                        self._set_model(new)
-                self.log(
-                    "ok",
-                    f"Model “{model.name}” updated to version {new.version}: {report.accepted_parts} "
-                    f"accepted part(s) learned, {report.known_bad_still_detected}/{report.known_bad_checked} "
-                    "known defective parts still detected.",
-                )
-                if report.still_nok:
-                    self.log(
-                        "warn",
-                        f"{len(report.still_nok)} accepted part(s) would still be rated NOK "
-                        f"({'; '.join(report.still_nok[:3])}). Missing, extra and blind holes are always "
-                        "defects; for other deviations lower the sensitivity of that method in the setup area "
-                        "if such parts are acceptable.",
-                    )
-            else:
-                self.log(
-                    "error",
-                    f"Model update of “{model.name}” rejected – the model is unchanged. " + " ".join(report.reasons),
-                )
-            self.last_update = report.to_dict()
-        except Exception as e:  # a failed update must never stop the inspection
-            logging.getLogger("qc").exception("Model update failed")
-            self.log("error", f"Model update failed: {e}")
-        finally:
-            with self.lock:
-                self._update_running = False
-
-    def undo_update(self, slug: str) -> None:
-        """Back to the version before the last update (can itself be undone the same way)."""
-        path = model_path(self.cfg.storage.models_dir, slug)
-        if path is None:
-            raise ValueError("Model not found.")
-        with self.lock:
-            if self._update_running:
-                raise ValueError("A model update is running – try again in a moment.")
-            restored = restore_previous(path)
-            if self.model is not None and self.model.slug == slug:
-                restored.sensitivity = dict(self.model.sensitivity)
-                self._set_model(restored)
-        self.log("ok", f"Model “{restored.name}” restored to version {restored.version}.")
-
-    def waiting_parts(self, slug: str) -> list[dict]:
-        path = model_path(self.cfg.storage.models_dir, slug)
-        if path is None:
-            raise ValueError("Model not found.")
-        return [{"name": stem, **info} for stem, _, info in LearningStore(path).items(PENDING)]
-
-    def discard_waiting(self, slug: str, name: str) -> None:
-        """A part was accepted by mistake – it is not learned."""
-        path = model_path(self.cfg.storage.models_dir, slug)
-        if path is None or LearningStore(path).image_path(PENDING, name) is None:
-            raise ValueError("Accepted part not found.")
-        LearningStore(path).remove(PENDING, [name])
-        self.log("info", f"Accepted part {name} of “{slug}” discarded – it will not be learned.")
-
-    def archive_results(self, label: str = "") -> dict:
+    def archive_results(self, label: str = "") -> dict[str, Any]:
         """Batch finished: pack all results into a ZIP, empty the results folder, reset counters."""
         with self.lock:  # results are written under this lock too → no half-written files
             if self.mode == "inspecting":
@@ -649,6 +583,7 @@ class QCSystem:
                 label = self.model.name
             info = qa.create_archive(self.cfg.storage.results_dir, self.cfg.storage.archive_dir, label)
             self.results.reset()
+            self.trigger.moving_captures = 0
         s = info["summary"]
         self.log(
             "ok",
@@ -657,8 +592,10 @@ class QCSystem:
         return info
 
     def reset_counts(self) -> None:
+        """Resets counters and history (setup area)."""
         with self.lock:
             self.results.reset()
+            self.trigger.moving_captures = 0
 
     def set_sim(
         self,
@@ -667,6 +604,7 @@ class QCSystem:
         part_type: str | None = None,
         any_angle: bool | None = None,
     ) -> None:
+        """Simulator settings from the setup area: lighting, defect rate, part type, any rotation."""
         cam = self.camera
         if not isinstance(cam, SimulatorSource):
             raise ValueError("Only available in the simulator.")
@@ -683,62 +621,25 @@ class QCSystem:
                 cam.respawn()
 
     # ------------------------------------------------------------------ status
-    def supervisor_notices(self) -> list[dict]:
+    def supervisor_notices(self) -> list[dict[str, Any]]:
         """Short plain-language hints for the operator screen (no technical details)."""
-        out: list[dict] = []
-        if self.camera.continuous and self.fps == 0 and self.last_frame is None:
-            out.append({"level": "error", "text": "No camera image. Check the camera cable and restart the device."})
-        if self.model is None and self.mode == "idle":
-            out.append({"level": "info", "text": "Select a part, or teach in a new part."})
-        if self.model is not None:
-            keys = {r["key"] for r in self.drift.state()["rows"] if r["warning"]}
-            out += [{"level": "warn", "text": text} for k, text in DRIFT_HINTS.items() if k in keys]
-            if (self.model.camera_profile or {}).get("sharp") is False:
-                out.append(
-                    {
-                        "level": "warn",
-                        "text": "The camera image is not sharp – the lens has to be focused "
-                        "once (setup technician). Detection is less precise until then.",
-                    }
-                )
-        out += self._improvement_notices()
-        if self.results.skipped:
-            out.append(
-                {
-                    "level": "error",
-                    "text": f"{self.results.skipped} part(s) could not be inspected because the "
-                    "system could not keep up. Slow the belt down.",
-                }
-            )
+        m, n_moving, n_skipped = self.model, self.trigger.moving_captures, self.results.skipped
+        drift = {r["key"] for r in self.drift.state()["rows"] if r["warning"]} if m is not None else set()
+        checks = [
+            (self.camera.continuous and self.fps == 0 and self.last_frame is None, "error", NOTICE_NO_CAMERA),
+            (m is None and self.mode == "idle", "info", NOTICE_SELECT_PART),
+            *[(key in drift, "warn", text) for key, text in DRIFT_HINTS.items()],
+            (m is not None and (m.camera_profile or {}).get("sharp") is False, "warn", NOTICE_NOT_SHARP),
+            (self.cfg.trigger.mode == "still" and n_moving > 0, "warn", NOTICE_NOT_STOPPED.format(n=n_moving)),
+        ]
+        out = [{"level": level, "text": text} for show, level, text in checks if show]
+        out += self.improve.notices(m)
+        if n_skipped:
+            out.append({"level": "error", "text": NOTICE_SKIPPED.format(n=n_skipped)})
         return out
 
-    def _improvement_notices(self) -> list[dict]:
-        if self.model is None or self.model.path is None or not self.cfg.learning.enabled:
-            return []
-        if self._update_running:
-            return [
-                {
-                    "level": "info",
-                    "text": "The model is being updated with the accepted parts – inspection "
-                    "continues with the current version.",
-                }
-            ]
-        last = self.last_update
-        if last and not last["released"] and last["model"] == self.model.name:
-            return [
-                {
-                    "level": "warn",
-                    "text": "The last model update was rejected (it contradicted parts confirmed "
-                    "as defective). The model is unchanged – inform the setup technician.",
-                }
-            ]
-        waiting, after = LearningStore(self.model.path).count(PENDING), self.cfg.learning.update_after
-        if waiting:
-            when = f"after {after}" if after else "by the setup technician"
-            return [{"level": "info", "text": f"{waiting} accepted part(s) waiting – the model learns them {when}."}]
-        return []
-
-    def status(self) -> dict:
+    def status(self) -> dict[str, Any]:
+        """Complete state for the UI (polled about once a second)."""
         m, fa, r = self.model, self.cam.focus, self.results
         return {
             "mode": self.mode,
@@ -746,6 +647,7 @@ class QCSystem:
             "camera_info": getattr(self.camera, "info", ""),
             "fps": round(self.fps, 1),
             "armed": self.trigger.armed,
+            "trigger_mode": self.cfg.trigger.mode,
             "continuous": self.camera.continuous,
             "model": m.summary() if m else None,
             "learning": {
@@ -769,12 +671,7 @@ class QCSystem:
             "feedback": r.feedback_counts,
             "last_result": r.last_result,
             "messages": list(self.messages)[:12],
-            "improvement": {
-                "enabled": self.cfg.learning.enabled,
-                "update_after": self.cfg.learning.update_after,
-                "running": self._update_running,
-                "last": self.last_update,
-            },
+            "improvement": self.improve.state(),
             "settings": {
                 "shots_per_part": self.shots_per_part,
                 "rotation_search": self.cfg.localization.rotation_search,

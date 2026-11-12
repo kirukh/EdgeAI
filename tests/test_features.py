@@ -214,6 +214,25 @@ def test_focus_assistant_measures_sharpness(make_system):
     assert s.status()["focus_assist"] is None
 
 
+def test_focus_assistant_ends_with_the_setup_area(make_system):
+    """Leaving the setup area (lock) or its timeout switches the focus assistant off – the operator
+    screen has no button for it, so its overlay must not stay in the live image."""
+    s = make_system()
+    c = web_client(s)
+    tok = c.post("/api/setup/unlock", json={"pin": s.cfg.ui.setup_pin}).json["token"]
+    h = {"X-Setup-Token": tok}
+    assert c.post("/api/focus", json={"on": True}, headers=h).json["ok"]
+    assert c.get("/api/status").json["focus_assist"] is not None  # setup open → stays on
+    c.post("/api/setup/lock", headers=h)
+    assert s.cam.focus is None and c.get("/api/status").json["focus_assist"] is None
+    tok = c.post("/api/setup/unlock", json={"pin": s.cfg.ui.setup_pin}).json["token"]
+    assert c.post("/api/focus", json={"on": True}, headers={"X-Setup-Token": tok}).json["ok"]
+    s.cfg.ui.setup_timeout_min = 0  # the setup session times out
+    time.sleep(0.01)
+    assert c.get("/api/status").json["focus_assist"] is None
+    assert sum("Focus assistant off" in m["text"] for m in s.messages) == 2  # logged once per switch-off
+
+
 # ------------------------------------------------------------ automatic camera setup
 def test_autosetup_building_blocks():
     from qc import autosetup as AS
@@ -334,12 +353,14 @@ def test_csrf_and_security_headers(make_system):
 
 # ------------------------------------------------------------------ config + compatibility
 def test_config_validation_reports_typos_and_bad_values():
-    for f in ("config.example.json", "config.pi3_imx219.json"):
+    for f in ("config.example.json", "config.pi3_imx219.json", "config.pi5_usb_c310.json"):
         AppConfig.load(f)  # shipped files are valid
     with pytest.raises(ConfigError, match="exposure"):
         AppConfig.from_dict({"camera": {"exposure": 3000}})  # typo of exposure_us
     with pytest.raises(ConfigError, match=r"trigger\.axis"):
         AppConfig.from_dict({"trigger": {"axis": "z"}})
+    with pytest.raises(ConfigError, match="power_line_hz"):
+        AppConfig.from_dict({"camera": {"power_line_hz": 55}})
     with pytest.raises(ConfigError, match="shots_per_part"):
         AppConfig.from_dict({"inspection": {"shots_per_part": 1}})
 
@@ -384,58 +405,72 @@ def test_model_of_the_full_version_still_loads(tmp_path):
     assert again.inspect(img, False).status == "NOK"
 
 
+# ------------------------------------------------------------------ camera sources
+class FakeRequest:
+    """Stand-ins for picamera2 – the Pi camera code is normally only runnable on a Pi."""
+
+    def make_array(self, name):
+        return np.zeros((480, 640, 3), np.uint8)
+
+    def get_metadata(self):
+        return {"SensorTimestamp": time.monotonic_ns() - 20_000_000, "ColourGains": (1.5, 1.7)}
+
+    def release(self):
+        pass
+
+
+class FakePicamera2:
+    camera_controls: ClassVar[dict] = {
+        "ScalerCrop": ((0, 0, 64, 64), (0, 0, 3280, 2464), (0, 0, 3280, 2464)),
+        "ExposureTime": (1, 1, 1),
+    }
+    camera_properties: ClassVar[dict] = {"Model": "imx219", "PixelArraySize": (3280, 2464)}
+
+    def __init__(self):
+        self.controls, self.video_kwargs = {}, None
+
+    def create_video_configuration(self, **kw):
+        self.video_kwargs = kw
+        return kw
+
+    def configure(self, c):
+        pass
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def close(self):
+        pass
+
+    def set_controls(self, d):
+        self.controls.update(d)
+
+    def capture_request(self):
+        return FakeRequest()
+
+    def capture_metadata(self):
+        return {"ScalerCrop": (0, 0, 3280, 2464), "LensPosition": self.controls.get("LensPosition", 2.0)}
+
+    def autofocus_cycle(self):
+        self.controls["AfCycle"] = True
+
+    def camera_configuration(self):
+        return {"sensor": {"output_size": (1640, 1232)}}
+
+
+class FakeAutofocusPicamera2(FakePicamera2):
+    """Camera Module 3: with focus motor."""
+
+    camera_controls: ClassVar[dict] = {**FakePicamera2.camera_controls, "AfMode": (0, 2, 0)}
+
+
 def test_pi_camera_source_against_fake_picamera2(monkeypatch):
     """The Pi camera code (normally only runnable on a Pi) against a stand-in for picamera2."""
     import sys
     import types
-
-    class FakeRequest:
-        def make_array(self, name):
-            return np.zeros((480, 640, 3), np.uint8)
-
-        def get_metadata(self):
-            return {"SensorTimestamp": time.monotonic_ns() - 20_000_000, "ColourGains": (1.5, 1.7)}
-
-        def release(self):
-            pass
-
-    class FakePicamera2:
-        camera_controls: ClassVar[dict] = {
-            "ScalerCrop": ((0, 0, 64, 64), (0, 0, 3280, 2464), (0, 0, 3280, 2464)),
-            "ExposureTime": (1, 1, 1),
-        }
-        camera_properties: ClassVar[dict] = {"Model": "imx219", "PixelArraySize": (3280, 2464)}
-
-        def __init__(self):
-            self.controls, self.video_kwargs = {}, None
-
-        def create_video_configuration(self, **kw):
-            self.video_kwargs = kw
-            return kw
-
-        def configure(self, c):
-            pass
-
-        def start(self):
-            pass
-
-        def stop(self):
-            pass
-
-        def close(self):
-            pass
-
-        def set_controls(self, d):
-            self.controls.update(d)
-
-        def capture_request(self):
-            return FakeRequest()
-
-        def capture_metadata(self):
-            return {"ScalerCrop": (0, 0, 3280, 2464)}
-
-        def camera_configuration(self):
-            return {"sensor": {"output_size": (1640, 1232)}}
 
     monkeypatch.setitem(sys.modules, "picamera2", types.SimpleNamespace(Picamera2=FakePicamera2))
     monkeypatch.setattr(time, "sleep", lambda s: None)
@@ -454,3 +489,289 @@ def test_pi_camera_source_against_fake_picamera2(monkeypatch):
     assert cam.cam.controls["ScalerCrop"] == (820, 616, 1640, 1232) and cam.crop == (0.25, 0.25, 0.5, 0.5)
     cam.set_exposure(800, 2.0)
     assert cam.cam.controls["ExposureTime"] == 800 and cam.cam.controls["AnalogueGain"] == 2.0
+
+
+def test_pi_camera_with_focus_motor(monkeypatch):
+    """Camera Module 3: one autofocus run at start (or a fixed lens position), autofocus on the part."""
+    import sys
+    import types
+
+    monkeypatch.setitem(sys.modules, "picamera2", types.SimpleNamespace(Picamera2=FakeAutofocusPicamera2))
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    from qc.camera import PiCameraSource
+    from qc.config import CameraConfig
+
+    cam = PiCameraSource(CameraConfig(source="pi", exposure_us=0))
+    assert cam.has_autofocus and cam.cam.controls["AfCycle"] and "focus fixed at 2.00 dioptres (≈ 50 cm)" in cam.info
+    assert "AeEnable" not in cam.cam.controls  # exposure_us = 0 → automatic exposure
+    cam = PiCameraSource(CameraConfig(source="pi", lens_position=4.0))
+    assert cam.cam.controls["AfMode"] == 0 and "4.00 dioptres" in cam.info  # fixed lens position
+    cam.set_lens(5.0)
+    assert cam.cam.controls["LensPosition"] == 5.0
+    cam.set_colour_gains((1.2, 1.4))
+    assert cam.cam.controls["ColourGains"] == (1.2, 1.4) and cam.cam.controls["AwbEnable"] is False
+    cam.awb_start()
+    assert cam.cam.controls["AwbEnable"] is True
+    cam.set_crop((0.5, 0.5, 0.5, 0.5))
+    cam.af_start((0.0, 0.0, 0.5, 0.5))  # window on a quarter of the zoomed image
+    assert cam.cam.controls["AfWindows"] == [(1640, 1232, 820, 616)] and cam.cam.controls["AfTrigger"] == 0
+    assert cam.af_state() == ("scanning", None)
+    cam.last_metadata = {"AfState": 2, "LensPosition": 3.5}
+    assert cam.af_state() == ("focused", 3.5)
+    cam.last_metadata = {"AfState": 3}
+    assert cam.af_state() == ("failed", None)
+    cam.close()
+
+
+def test_camera_sources_from_the_config(tmp_path):
+    from qc.camera import FolderSource, SimulatorSource, open_camera
+    from qc.config import CameraConfig
+
+    assert isinstance(open_camera(CameraConfig(source="sim")), SimulatorSource)
+    with pytest.raises(RuntimeError, match="No images"):
+        open_camera(CameraConfig(source=f"folder:{tmp_path}"))
+    for i in range(2):
+        cv2.imwrite(str(tmp_path / f"{i}.png"), np.full((48, 64, 3), i, np.uint8))
+    src = open_camera(CameraConfig(source=f"folder:{tmp_path}"))
+    assert isinstance(src, FolderSource) and not src.continuous and src.current_file.name == "0.png"
+    assert src.next_part()[0, 0, 0] == 0 and src.next_part()[0, 0, 0] == 1 and src.current_file.name == "1.png"
+    assert src.next_part()[0, 0, 0] == 0  # loops by default
+    assert FolderSource(str(tmp_path), loop=False).next_part() is not None
+    with pytest.raises(ValueError, match="Unknown camera source"):
+        open_camera(CameraConfig(source="ftp:camera"))
+    with pytest.raises(RuntimeError, match="Could not open camera"):
+        open_camera(CameraConfig(source="usb:/dev/does-not-exist"))
+
+
+# ------------------------------------------------------------ stop-and-go belt ("still" capture mode)
+def _drive(trig, xs, rng):
+    part = S.make_part("A", None, np.random.default_rng(0))
+    return [i for i, x in enumerate(xs) if trig.update(S.compose(part, (x, 240, 2), "front", rng=rng))]
+
+
+def test_still_mode_captures_only_the_resting_part():
+    from qc.config import TriggerConfig
+    from qc.trigger import PartTrigger
+
+    rng = np.random.default_rng(3)
+    brake = [320 - 60 * t**2 for t in np.linspace(1, 0, 8)]  # brakes into the centre
+    xs = [*range(-150, 260, 14), *brake, *[320] * 10, *range(334, 900, 14)]
+    rest = xs.index(320)  # first frame at rest
+    passing = _drive(PartTrigger(TriggerConfig(), LocalizationConfig()), xs, rng)
+    assert len(passing) == 1 and passing[0] <= rest  # "pass": already while braking
+    trig = PartTrigger(TriggerConfig(mode="still"), LocalizationConfig())
+    still = _drive(trig, xs, rng)
+    assert len(still) == 1 and still[0] > passing[0] and xs[still[0]] == 320 and trig.moving_captures == 0
+    jump = [*range(-150, 300, 45), *[320] * 10, *range(365, 900, 45)]  # abrupt stop (like a stop-and-go video)
+    trig = PartTrigger(TriggerConfig(mode="still"), LocalizationConfig())
+    assert _drive(trig, jump, rng) == [jump.index(320) + 2]  # after three frames at rest
+    trig = PartTrigger(TriggerConfig(mode="still"), LocalizationConfig())  # belt does not stop
+    moving = _drive(trig, list(range(-150, 900, 14)), rng)
+    assert len(moving) == 1 and trig.moving_captures == 1  # still captured, but counted
+
+
+def test_still_mode_with_a_stop_and_go_belt(make_system):
+    s = make_system(sim_defect_rate=0.0, sim_stop_frames=12)
+    s.cfg.trigger.mode = "still"
+    s.start()
+    s.start_learning("Plate", auto_finish=True)
+    s.teach.target = 4
+    wait(lambda: s.mode == "idle" and s.model is not None, 120)
+    s.start_inspection()
+    wait(lambda: len(s.results.history) >= 3, 120)
+    s.stop_inspection()
+    assert s.trigger.moving_captures == 0 and all(h["status"] == "OK" for h in s.results.history)
+    assert not any("did not stop" in n["text"] for n in s.supervisor_notices())
+    s.camera.cfg.sim_stop_frames = 0  # the belt no longer stops: parts are captured in motion and reported
+    s.start_inspection()
+    wait(lambda: s.trigger.moving_captures >= 1, 60)
+    s.stop_inspection()
+    assert any("did not stop" in n["text"] for n in s.supervisor_notices())
+    s.reset_counts()
+    assert s.trigger.moving_captures == 0
+
+
+def test_capture_mode_switch_via_setup_api(make_system, tmp_path):
+    s = make_system()
+    s.cfg.path = str(tmp_path / "config.json")
+    c = web_client(s)
+    assert c.post("/api/trigger-mode", json={"mode": "still"}).status_code == 403  # setup function
+    tok = c.post("/api/setup/unlock", json={"pin": s.cfg.ui.setup_pin}).json["token"]
+    h = {"X-Setup-Token": tok}
+    assert c.post("/api/trigger-mode", json={"mode": "sometimes"}, headers=h).status_code == 400
+    assert c.post("/api/trigger-mode", json={"mode": "still"}, headers=h).json["ok"]
+    assert c.get("/api/status").json["trigger_mode"] == "still"
+    assert AppConfig.load(tmp_path / "config.json").trigger.mode == "still"
+
+
+# ------------------------------------------------------------ USB camera (Logitech C310 on a Raspberry Pi 5)
+C310_CTRLS = """
+User Controls
+
+                     brightness 0x00980900 (int)    : min=0 max=255 step=1 default=128 value=128
+                       contrast 0x00980901 (int)    : min=0 max=255 step=1 default=32 value=32
+                     saturation 0x00980902 (int)    : min=0 max=255 step=1 default=32 value=32
+        white_balance_automatic 0x0098090c (bool)   : default=1 value=1
+                           gain 0x00980913 (int)    : min=0 max=255 step=1 default=64 value=64
+           power_line_frequency 0x00980918 (menu)   : min=0 max=2 default=2 value=2 (60 Hz)
+      white_balance_temperature 0x0098091a (int)    : min=0 max=10000 step=10 default=4000 value=4000 flags=inactive
+                      sharpness 0x0098091b (int)    : min=0 max=255 step=1 default=24 value=24
+         backlight_compensation 0x0098091c (int)    : min=0 max=1 step=1 default=0 value=0
+
+Camera Controls
+
+                  auto_exposure 0x009a0901 (menu)   : min=0 max=3 default=3 value=3 (Aperture Priority Mode)
+         exposure_time_absolute 0x009a0902 (int)    : min=1 max=10000 step=1 default=166 value=166 flags=inactive
+     exposure_dynamic_framerate 0x009a0903 (bool)   : default=0 value=1
+"""
+
+
+class FakeV4L2:
+    """Stand-in for v4l2-ctl: answers --list-ctrls, records --set-ctrl."""
+
+    def __init__(self, listing=C310_CTRLS, missing=False):
+        self.listing, self.missing, self.sets = listing, missing, []
+
+    def __call__(self, cmd, **kw):
+        import types
+
+        if self.missing:
+            raise FileNotFoundError("v4l2-ctl")
+        if "--set-ctrl" in cmd:
+            name, value = cmd[-1].split("=")
+            self.sets.append((name, int(value)))
+        return types.SimpleNamespace(returncode=0, stdout=self.listing)
+
+    def last(self, name):
+        return [v for n, v in self.sets if n == name][-1]
+
+
+class FakeCapture:
+    """Stand-in for cv2.VideoCapture of a 1280 × 960 camera at ~100 fps; pixel value = column // 8."""
+
+    def __init__(self, *args):
+        self.props, self.n, self.released = {}, 0, False
+        self.base = np.tile((np.arange(1280) // 8).astype(np.uint8)[None, :, None], (960, 1, 3))
+
+    def isOpened(self):  # noqa: N802 - name of the OpenCV interface
+        return True
+
+    def set(self, prop, value):
+        self.props[prop] = value
+        return True
+
+    def get(self, prop):
+        return {cv2.CAP_PROP_FRAME_WIDTH: 1280, cv2.CAP_PROP_FRAME_HEIGHT: 960, cv2.CAP_PROP_FPS: 30}.get(prop, 0)
+
+    def read(self):
+        time.sleep(0.01)
+        self.n += 1
+        frame = self.base.copy()
+        frame[0, 0] = self.n % 256  # frame counter
+        return True, frame
+
+    def release(self):
+        self.released = True
+
+
+def _usb(cfg, v4l2):
+    from qc.usb_camera import USBCameraSource, V4L2Controls
+
+    return USBCameraSource(cfg, "0", FakeCapture, lambda dev: V4L2Controls(dev, run=v4l2))
+
+
+def test_usb_camera_settings_for_the_c310():
+    """Pi 5 + C310: 1280 × 960 MJPG recorded, exposure in 100 µs units, no automatic frame-rate reduction,
+    50 Hz against flicker, white balance fixed; the automatic camera setup can control it."""
+    from qc.config import CameraConfig
+
+    v4l2 = FakeV4L2()
+    cam = _usb(CameraConfig(source="usb:0", width=640, height=480, usb_capture=[1280, 960], exposure_us=2000), v4l2)
+    try:
+        assert cam.can_control and cam.path == "/dev/video0" and "1280×960 MJPG" in cam.info
+        assert cam.cap.props[cv2.CAP_PROP_FRAME_WIDTH] == 1280 and cam.cap.props[cv2.CAP_PROP_BUFFERSIZE] == 1
+        assert cam.cap.props[cv2.CAP_PROP_FOURCC] == cv2.VideoWriter.fourcc(*"MJPG")
+        assert v4l2.last("power_line_frequency") == 1  # 50 Hz
+        assert v4l2.last("auto_exposure") == 1 and v4l2.last("exposure_dynamic_framerate") == 0
+        assert v4l2.last("exposure_time_absolute") == 20 and v4l2.last("gain") == 64  # 2 ms, gain ×1
+        assert v4l2.last("white_balance_automatic") == 0 and v4l2.last("white_balance_temperature") == 4000
+        cam.set_exposure(15000, 2.0)
+        assert v4l2.last("exposure_time_absolute") == 150 and v4l2.last("gain") == 128
+        cam.set_exposure(5_000_000, 9.0)  # clamped to the camera's ranges
+        assert v4l2.last("exposure_time_absolute") == 10000 and v4l2.last("gain") == 255
+        assert cam.exposure == (1_000_000, 9.0)
+    finally:
+        cam.close()
+    assert cam.cap.released
+
+
+def test_usb_camera_gives_the_newest_frame_and_zooms_in_software():
+    from qc.config import CameraConfig
+
+    cam = _usb(CameraConfig(source="usb:0", width=640, height=480, usb_capture=[1280, 960]), FakeV4L2())
+    try:
+        f1 = cam.read()
+        assert f1.shape == (480, 640, 3) and cam.last_age_s < 0.5
+        time.sleep(0.15)  # the camera delivered several frames meanwhile – only the newest counts
+        n_before = cam.cap.n
+        f2 = cam.read()
+        assert cam.cap.n - n_before <= 2 and f2 is not f1
+        cam.set_crop((0.25, 0.25, 0.5, 0.5))  # 2× zoom: 640 × 480 of the 1280 × 960 frame, no upscaling
+        z = cam.read()
+        assert z.shape == (480, 640, 3) and z[100, 1, 0] == 320 // 8 and z[100, 639, 0] == 959 // 8
+    finally:
+        cam.close()
+
+
+def test_usb_camera_without_v4l2_ctl_and_with_old_control_names():
+    from qc.config import CameraConfig
+    from qc.usb_camera import V4L2Controls
+
+    cam = _usb(CameraConfig(source="usb:0", exposure_us=2000), FakeV4L2(missing=True))
+    try:
+        assert not cam.can_control and "install v4l-utils" in cam.info
+        cam.set_exposure(1000, 1.0)  # nothing to control – no error
+        assert cam.cap.props[cv2.CAP_PROP_AUTO_EXPOSURE] == 1  # OpenCV's basic setting instead
+    finally:
+        cam.close()
+    old = C310_CTRLS.replace("auto_exposure", "exposure_auto").replace("exposure_time_absolute", "exposure_absolute")
+    old = old.replace("exposure_dynamic_framerate", "exposure_auto_priority")
+    ctl = V4L2Controls("/dev/video0", run=FakeV4L2(old))
+    assert ctl.has("exposure") and ctl.control("auto_exposure").name == "exposure_auto"
+    assert ctl.control("dynamic_fps").name == "exposure_auto_priority" and not ctl.has("focus_auto")
+
+
+def test_usb_source_plays_a_video_file(tmp_path):
+    """usb:<file> – e.g. a recorded belt video – runs through the same source (no camera controls)."""
+    from qc.camera import open_camera
+    from qc.config import CameraConfig
+
+    path = str(tmp_path / "belt.avi")
+    out = cv2.VideoWriter(path, cv2.VideoWriter.fourcc(*"MJPG"), 30, (320, 240))
+    for i in range(5):
+        out.write(np.full((240, 320, 3), 40 * i, np.uint8))
+    out.release()
+    cam = open_camera(CameraConfig(source=f"usb:{path}", width=160, height=120, fps=200))
+    try:
+        assert not cam.is_device and cam.ctl is None and not cam.can_control
+        assert cam.read().shape == (120, 160, 3)
+    finally:
+        cam.close()
+
+
+def test_jpeg_warning_filter_drops_only_libjpeg_lines():
+    """libjpeg writes its per-frame MJPG warnings straight to fd 2; only those lines are hidden."""
+    import subprocess
+    import sys
+
+    code = (
+        "import os, time\n"
+        "from qc.usb_camera import quiet_jpeg_warnings\n"
+        "f = quiet_jpeg_warnings()\n"
+        "os.write(2, b'Corrupt JPEG data: 4 extraneous bytes before marker 0xd7\\n' * 500)\n"
+        "os.write(2, b'real error\\n')\n"
+        "time.sleep(0.3)\n"
+        "print(f.dropped)\n"
+    )
+    res = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
+    assert res.stderr == "real error\n" and res.stdout.strip() == "500"

@@ -51,8 +51,14 @@ cd ~/pi_qc
 ## 3. Installieren
 
 ```bash
-bash deploy/install.sh --no-autostart
+bash deploy/install.sh --no-autostart          # Pi-Kamera (Camera Module)
+bash deploy/install.sh --usb --no-autostart    # USB-Kamera, z. B. Raspberry Pi 5 + Logitech C310
 ```
+
+**USB-Kamera:** `--usb` installiert statt `picamera2` die Kamera-Werkzeuge `v4l-utils` und nimmt die Vorlage
+`config.pi5_usb_c310.json` (Kamera `usb:0`, Aufnahme 1280 × 960 MJPG, 50 Hz, fester Weißabgleich,
+Stillstand-Modus). Welche Nummer die Kamera hat, zeigt `v4l2-ctl --list-devices` (Eintrag *UVC Camera*,
+`/dev/video0` → `usb:0`); eine andere Nummer in `config.json` unter `"camera": {"source": …}` eintragen.
 
 Was du siehst (ohne sudo, ungefähr):
 ```
@@ -90,6 +96,7 @@ Das Skript darf jederzeit erneut laufen (z. B. nach einem Update); es macht nur,
 ```bash
 cd ~/pi_qc
 .venv/bin/qc web --camera pi            # gleichwertig: .venv/bin/python main.py web --camera pi
+.venv/bin/qc web                        # USB-Kamera: die Kamera steht in config.json (usb:0)
 ```
 Im Terminal erscheint u. a. `Camera: sensor imx219, readout 1640×1232 …` und `Web UI: http://0.0.0.0:8000/`.
 **Beenden mit `Ctrl+C`.**
