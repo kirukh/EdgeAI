@@ -40,7 +40,17 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_USER="${SUDO_USER:-$(id -un)}"
 PYTHON="${QC_PYTHON:-python3}"           # QC_PYTHON: use another Python interpreter
 cd "$DIR"
-if [ "${QC_NO_SUDO:-0}" != 1 ] && sudo -n true 2>/dev/null; then HAVE_SUDO=1; else HAVE_SUDO=0; fi   # QC_NO_SUDO=1 forces the user mode
+# sudo: without a password, or – for an administrator in a terminal – after asking for the password once.
+# QC_NO_SUDO=1 forces the user mode.
+HAVE_SUDO=0
+if [ "${QC_NO_SUDO:-0}" != 1 ] && command -v sudo >/dev/null; then
+  if sudo -n true 2>/dev/null; then
+    HAVE_SUDO=1
+  elif [ -t 0 ] && id -nG "$RUN_USER" | grep -qwE "sudo|wheel|admin"; then
+    echo "== Administrator rights: enter your password (used for apt and the autostart service)"
+    sudo -v && HAVE_SUDO=1 || echo "   no sudo – continuing without administrator rights"
+  fi
+fi
 echo "== Project: $DIR (user: $RUN_USER, sudo: $([ $HAVE_SUDO = 1 ] && echo yes || echo no))"
 
 fail() { echo; echo "!! $*"; exit 1; }
