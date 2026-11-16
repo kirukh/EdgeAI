@@ -88,6 +88,11 @@ class MethodResult:
         }
 
 
+def kernel_size(size: int, scale: float) -> int:
+    """Odd filter size ``size`` (given for 640 px working width) at another resolution."""
+    return max(3, int(round(size * scale)) | 1)
+
+
 def bbox_from_mask(mask: np.ndarray) -> tuple[int, int, int, int]:
     """Bounding box (x, y, w, h) of the True pixels of a mask."""
     ys, xs = np.nonzero(mask)
@@ -138,12 +143,27 @@ class Method:
 
     name = "base"
 
-    def __init__(self, cfg: MethodConfig):
+    def __init__(self, cfg: MethodConfig, scale: float = 1.0):
         self.cfg = cfg
+        # Working resolution relative to the 640 px all pixel settings are given for
+        # (localization.work_width / 640): lengths grow with it, areas with its square.
+        self.scale = float(scale)
         self.report: dict[str, Any] = {}
         # set by fit(): sample index → reasons why this reference differs clearly from the
         # other references (probably a defective part taught in by mistake)
         self.suspects: dict[int, list[str]] = {}
+
+    def px(self, length: float) -> float:
+        """A length given for 640 px working width, in pixels of this model's resolution."""
+        return length * self.scale
+
+    def area(self, pixels: float) -> float:
+        """An area given for 640 px working width, in pixels of this model's resolution."""
+        return pixels * self.scale**2
+
+    def kernel(self, size: int) -> int:
+        """An (odd) filter size given for 640 px working width."""
+        return kernel_size(size, self.scale)
 
     def _flag(self, i: int, why: str) -> None:
         self.suspects.setdefault(int(i), []).append(why)

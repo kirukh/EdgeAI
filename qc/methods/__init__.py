@@ -50,8 +50,8 @@ __all__ = [
 METHODS: dict[str, type[Method]] = {"geometry": GeometryMethod, "diff": DiffMethod, "pca": PCAMethod}
 
 
-def create(name: str, cfg: MethodConfig) -> Method:
+def create(name: str, cfg: MethodConfig, scale: float = 1.0) -> Method:
     """Inspection method by name (``geometry``, ``diff`` or ``pca``)."""
     if name not in METHODS:
         raise ValueError(f"Unknown method '{name}'. Available: {', '.join(METHODS)}")
-    return METHODS[name](cfg)
+    return METHODS[name](cfg, scale)

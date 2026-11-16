@@ -79,6 +79,15 @@ class PartTrigger:
         return len(self.track) == self.track.maxlen and max(self.track) - min(self.track) < STILL_TOLERANCE
 
     @property
+    def position(self) -> tuple[float, float]:
+        """Centre of the last detected part as a fraction of the image size ((−1, −1) without a part)."""
+        det = self.last_det
+        if det is None:
+            return (-1.0, -1.0)
+        w = self.cfg.detect_width
+        return (det.centroid[0] / w, det.centroid[1] / w)
+
+    @property
     def part_complete(self) -> bool:
         """Is the last detected part completely in the image?"""
         return self.last_det is not None and self.last_det.complete

@@ -40,13 +40,13 @@ from .camera_setup import CameraSetup
 from .config import AppConfig
 from .drift import DriftMonitor
 from .improvement import ModelImprovement
-from .inspection import inspect_part
+from .inspection import inspect_part, merge_still
 from .model import MIN_REFERENCES, QCModel
 from .model_store import ModelStore
 from .results import OUTCOME_TEXT, ResultStore
 from .synthetic import PART_TYPES
 from .teach import TeachIn
-from .trigger import PartTrigger
+from .trigger import STILL_TOLERANCE, PartTrigger
 
 PREVIEW_WIDTH = 640
 QUEUE_PARTS = 3  # parts waiting for inspection before new ones are not inspected
@@ -223,8 +223,9 @@ class QCSystem:
 
     def _on_part(self, frame: np.ndarray, manual: bool) -> None:
         """A part was triggered: during inspection collect further shots while it passes."""
-        if self.mode == "inspecting" and self.camera.continuous:
-            self._burst = {"shots": [frame], "n": self.shots_per_part}
+        averaging = self.cfg.trigger.mode == "still" and self.cfg.inspection.average_still and not manual
+        if self.camera.continuous and (self.mode == "inspecting" or averaging):
+            self._burst = {"shots": [frame], "n": self.shots_per_part, "pos": [self.trigger.position], "avg": averaging}
         else:
             self._submit([frame], manual)
 
@@ -234,9 +235,11 @@ class QCSystem:
             return
         if self.trigger.part_complete and len(b["shots"]) < b["n"]:
             b["shots"].append(frame)
+            b["pos"].append(self.trigger.position)
         if len(b["shots"]) >= b["n"] or not self.trigger.part_complete:
             self._burst = None
-            self._submit(b["shots"], False)
+            shots = merge_still(b["shots"], b["pos"], STILL_TOLERANCE) if b["avg"] else b["shots"]
+            self._submit(shots, False)
 
     def _submit(self, shots: list[np.ndarray], manual: bool) -> None:
         """Hands a captured part to the inspection thread."""

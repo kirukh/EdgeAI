@@ -96,6 +96,11 @@ class InspectionResult:
         }
 
 
+def px_scale(loc: LocalizationConfig) -> float:
+    """Working resolution relative to 640 px – the pixel settings of the methods are given for 640 px."""
+    return loc.work_width / 640.0
+
+
 def standalone_levels(cfg: MethodConfig) -> dict[str, float]:
     """Score above which a method decides NOK on its own (fusion rule)."""
     return {"geometry": cfg.geometry_standalone, "diff": cfg.diff_standalone, "pca": cfg.pca_standalone}
@@ -364,7 +369,7 @@ class QCModel:
         excludable: set[int] = set()
         order = {"geometry": 0, "diff": 1, "pca": 2}
         for mname in sorted(method_cfg.methods, key=lambda m: order.get(m, 9)):
-            m = M.create(mname, method_cfg)
+            m = M.create(mname, method_cfg, px_scale(loc_cfg))
             m.fit(aligned, accepted or set())
             model.methods[mname] = m
             for i, why in m.suspects.items():
@@ -540,7 +545,7 @@ class QCModel:
             arrays = {k: npz[k] for k in npz.files}
         model.ref_norm = arrays["ref_norm"]
         for k, mmeta in meta["methods"].items():
-            m = M.create(k, mcfg)
+            m = M.create(k, mcfg, px_scale(loc))
             prefix = f"{k}__"
             m.load_state(mmeta, {a[len(prefix) :]: v for a, v in arrays.items() if a.startswith(prefix)})
             model.methods[k] = m

@@ -181,6 +181,9 @@ class InspectionConfig:
     shots_per_part: int = 3
     confirm_margin: float = 0.5  # 1st image clearly good = every method score below this (half its threshold)
     tie_is_nok: bool = True  # with an even number of shots: tie → NOK (safe side)
+    # Trigger mode "still": the shots of the resting part are averaged into one low-noise image
+    # (teach-in and inspection) instead of being voted on.
+    average_still: bool = True
 
 
 @dataclass

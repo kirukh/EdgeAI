@@ -3,13 +3,34 @@
 Several images of the same part are taken while it passes the camera. Random false alarms
 (dust, a reflection, sensor noise) affect only single images and are outvoted. To save time
 on the Pi, a CLEARLY good first image (every method far inside its tolerance) is final.
+
+With a stop-and-go belt (trigger mode ``still``) the shots show the resting part – they differ
+only by sensor noise, lamp flicker and compression artefacts. A vote gains nothing there; instead
+the shots are averaged into ONE image with less noise (``merge_still``), for teach-in and inspection.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
 
 from .model import InspectionResult, QCModel
+
+
+def merge_still(
+    shots: list[np.ndarray], positions: Sequence[tuple[float, float]], tolerance: float
+) -> list[np.ndarray]:
+    """Shots of a resting part → one averaged image (noise ÷ √n). ``positions`` = part centre in
+    every shot as a fraction of the image size; if the part moved more than ``tolerance`` between
+    the shots they are returned unchanged (they are then voted on as usual)."""
+    if len(shots) < 2 or len(positions) != len(shots):
+        return shots
+    p = np.asarray(positions, np.float64)
+    if float(np.max(p.max(axis=0) - p.min(axis=0))) >= tolerance:
+        return shots
+    mean = np.mean(np.stack(shots).astype(np.float32), axis=0)
+    return [np.clip(np.rint(mean), 0, 255).astype(np.uint8)]
 
 
 def vote(results: list[InspectionResult], tie_is_nok: bool = True) -> InspectionResult:

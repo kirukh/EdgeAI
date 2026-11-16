@@ -19,6 +19,7 @@ from .base import (
     Method,
     MethodResult,
     components,
+    kernel_size,
     max_component_area,
     robust_outliers,
     split_accepted,
@@ -38,13 +39,15 @@ class Hole:
     mask: np.ndarray
 
 
-def find_holes(a: AlignedPart, min_area: float) -> tuple[list[Hole], np.ndarray]:
-    """Segments through-openings: background brightness inside the outer contour."""
-    k7 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-    inner = cv2.erode(a.filled_mask, k7)
-    material = cv2.erode(a.filled_mask, np.ones((3, 3), np.uint8)) > 0  # inside the outline
+def find_holes(a: AlignedPart, min_area: float, scale: float = 1.0) -> tuple[list[Hole], np.ndarray]:
+    """Segments through-openings: background brightness inside the outer contour.
+    ``min_area`` in pixels of the image; ``scale`` = working width / 640 (filter sizes)."""
+    k3, k7 = kernel_size(3, scale), kernel_size(7, scale)
+    edge = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k7, k7))
+    inner = cv2.erode(a.filled_mask, edge)
+    material = cv2.erode(a.filled_mask, np.ones((k3, k3), np.uint8)) > 0  # inside the outline
     cand: np.ndarray = ((a.norm < 0.5) & (inner > 0)).astype(np.uint8) * 255
-    cand = cv2.morphologyEx(cand, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    cand = cv2.morphologyEx(cand, cv2.MORPH_OPEN, np.ones((k3, k3), np.uint8))
     contours, _ = cv2.findContours(cand, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
     holes = []
     for c in contours:
@@ -58,7 +61,7 @@ def find_holes(a: AlignedPart, min_area: float) -> tuple[list[Hole], np.ndarray]
             continue
         (_, _), (rw, rh), _ = cv2.minAreaRect(c)
         bx, by, bw, bh = cv2.boundingRect(c)
-        cx, cy, area = _subpixel_moments(a, filled, material)
+        cx, cy, area = _subpixel_moments(a, filled, material, edge)
         holes.append(
             Hole(
                 cx=cx,
@@ -73,7 +76,9 @@ def find_holes(a: AlignedPart, min_area: float) -> tuple[list[Hole], np.ndarray]
     return holes, cand
 
 
-def _subpixel_moments(a: AlignedPart, filled: np.ndarray, material: np.ndarray) -> tuple[float, float, float]:
+def _subpixel_moments(
+    a: AlignedPart, filled: np.ndarray, material: np.ndarray, edge: np.ndarray
+) -> tuple[float, float, float]:
     """Sub-pixel area and centre of an opening.
 
     The region around the opening is upsampled 4× (bilinear) and cut exactly at
@@ -83,10 +88,10 @@ def _subpixel_moments(a: AlignedPart, filled: np.ndarray, material: np.ndarray) 
     """
     up = 4
     x, y, w, h = cv2.boundingRect(filled)
-    pad = 3
+    pad = edge.shape[0] // 2
     x0, y0 = max(0, x - pad), max(0, y - pad)
     x1, y1 = min(filled.shape[1], x + w + pad), min(filled.shape[0], y + h + pad)
-    roi = cv2.dilate(filled[y0:y1, x0:x1], _K_EDGE) > 0
+    roi = cv2.dilate(filled[y0:y1, x0:x1], edge) > 0
     patch = np.where(roi & material[y0:y1, x0:x1], a.norm[y0:y1, x0:x1], 1.0).astype(np.float32)
     big = cv2.resize(patch, ((x1 - x0) * up, (y1 - y0) * up), interpolation=cv2.INTER_LINEAR)
     m = cv2.moments((big < 0.5).astype(np.uint8), binaryImage=True)
@@ -99,11 +104,8 @@ def _subpixel_moments(a: AlignedPart, filled: np.ndarray, material: np.ndarray) 
     return cx, cy, m["m00"] / (up * up)
 
 
-_K_EDGE = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-
-
 def _match(
-    expected_xy: np.ndarray, expected_d: np.ndarray, holes: list[Hole]
+    expected_xy: np.ndarray, expected_d: np.ndarray, holes: list[Hole], scale: float = 1.0
 ) -> tuple[list[tuple[int, int]], list[int], list[int]]:
     """Assigns detected holes to the nominal holes (Hungarian matching)."""
     if len(expected_xy) == 0 or len(holes) == 0:
@@ -111,7 +113,7 @@ def _match(
     big = 1e6
     cost = np.full((len(expected_xy), len(holes)), big)
     for i, (x, y) in enumerate(expected_xy):
-        gate = max(3.0 * expected_d[i], 40.0)
+        gate = max(3.0 * expected_d[i], 40.0 * scale)
         for j, h in enumerate(holes):
             d = math.hypot(h.cx - x, h.cy - y)
             ratio = h.eq_d / max(expected_d[i], 1.0)
@@ -134,7 +136,7 @@ class HoleMeasurement(NamedTuple):
 
 
 def _match_references(
-    detected: list[list[Hole]], ref: list[Hole], shape: tuple[int, ...], mask_from: Collection[int]
+    detected: list[list[Hole]], ref: list[Hole], shape: tuple[int, ...], mask_from: Collection[int], scale: float
 ) -> tuple[list[dict[int, HoleMeasurement]], list[np.ndarray], list[int]]:
     """Assigns the holes of every reference to the holes of ``ref``.
 
@@ -146,7 +148,7 @@ def _match_references(
     masks = [np.zeros(shape, np.float32) for _ in ref]
     inconsistent = []
     for idx, holes in enumerate(detected):
-        pairs, un_e, un_d = _match(exp_xy, exp_d, holes)
+        pairs, un_e, un_d = _match(exp_xy, exp_d, holes, scale)
         if un_e or un_d:
             inconsistent.append(idx)
         for e, j in pairs:
@@ -176,11 +178,11 @@ class GeometryMethod(Method):
     def fit(self, samples: list[AlignedPart], accepted: Collection[int] = ()) -> None:
         """Nominal holes and outline from the good parts, tolerances from their spread, screening of the references."""
         normal, acc = split_accepted(len(samples), accepted)
-        detected = [find_holes(s, self.cfg.hole_min_area_px)[0] for s in samples]
+        detected = [self._holes(s) for s in samples]
         counts = [len(detected[i]) for i in normal]
         ref = detected[normal[counts.index(max(set(counts), key=counts.count))]]  # the usual hole count
         shape = samples[0].gray.shape
-        per_hole, masks, inconsistent = _match_references(detected, ref, shape, set(normal))
+        per_hole, masks, inconsistent = _match_references(detected, ref, shape, set(normal), self.scale)
         # nominal geometry from the normal good parts; accepted deviations widen the tolerance
         self._learn_nominal([{i: v for i, v in ph.items() if i not in acc} for ph in per_hole], masks, shape)
         self._learn_accepted(per_hole, acc)
@@ -189,12 +191,12 @@ class GeometryMethod(Method):
         tolerated = [self._outline_diff(samples[i]) for i in sorted(acc)]
         if tolerated:  # outline deviations of accepted parts are tolerated at that place
             mask = np.any(tolerated, axis=0).astype(np.uint8)
-            self.outline_tolerated = cv2.dilate(mask, np.ones((7, 7), np.uint8))
+            self.outline_tolerated = cv2.dilate(mask, np.ones((self.kernel(7),) * 2, np.uint8))
 
         # Outline deviation: the largest deviation among the normal good parts is the baseline
         base = [max_component_area(self._outline_diff(s)) for s in samples]
         normal_base = [base[i] for i in normal]
-        self.outline_min_area = float(max(self.cfg.outline_min_area_px, 1.5 * max(normal_base, default=0)))
+        self.outline_min_area = float(max(self.area(self.cfg.outline_min_area_px), 1.5 * max(normal_base, default=0)))
         self._screen(per_hole, inconsistent, base)
 
         n_e = len(ref)
@@ -205,10 +207,13 @@ class GeometryMethod(Method):
             "inconsistent_references": inconsistent,
             # Holes whose position scatters strongly across the references → alignment
             # was inconsistent or the good parts themselves vary a lot.
-            "high_scatter_holes": [i for i in range(n_e) if self.pos_std[i] > max(2.0, 0.1 * self.exp_d[i])],
+            "high_scatter_holes": [i for i in range(n_e) if self.pos_std[i] > max(self.px(2.0), 0.1 * self.exp_d[i])],
             "outline_min_area_px": round(self.outline_min_area, 1),
             "n_samples": len(samples),
         }
+
+    def _holes(self, s: AlignedPart) -> list[Hole]:
+        return find_holes(s, self.area(self.cfg.hole_min_area_px), self.scale)[0]
 
     def _learn_nominal(
         self, per_hole: list[dict[int, HoleMeasurement]], masks: list[np.ndarray], shape: tuple[int, ...]
@@ -244,7 +249,7 @@ class GeometryMethod(Method):
                     continue
                 mxy = others[:, :2].mean(0)
                 pos_sd = math.sqrt(float(np.mean(np.sum((others[:, :2] - mxy) ** 2, 1))))
-                pos_tol = max(c.pos_tol_px, c.tol_sigma * pos_sd)
+                pos_tol = max(self.px(c.pos_tol_px), c.tol_sigma * pos_sd)
                 md = float(others[:, 2].mean())
                 d_tol = max(c.dia_tol_ratio * md, c.tol_sigma * float(others[:, 2].std(ddof=1)))
                 pos_err = math.hypot(x - mxy[0], y - mxy[1])
@@ -252,7 +257,7 @@ class GeometryMethod(Method):
                     self._flag(i, f"hole {e + 1} is {pos_err:.1f} px away from its position on the other references")
                 elif abs(d - md) > d_tol:
                     self._flag(i, f"hole {e + 1} diameter {d:.1f} px instead of {md:.1f} px on the other references")
-        for i in robust_outliers(outline_areas, c.outline_min_area_px, c.screen_k):
+        for i in robust_outliers(outline_areas, self.area(c.outline_min_area_px), c.screen_k):
             self._flag(i, f"outline deviates ({outline_areas[i]:.0f} px)")
 
     def _learn_accepted(self, per_hole: list[dict[int, HoleMeasurement]], accepted: set[int]) -> None:
@@ -274,12 +279,13 @@ class GeometryMethod(Method):
         xor = cv2.bitwise_xor(self.ref_filled * 255, s.filled_mask)
         if self.outline_tolerated is not None:
             xor[self.outline_tolerated > 0] = 0
-        return cv2.morphologyEx(xor, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))) > 0
+        k = self.kernel(5)
+        return cv2.morphologyEx(xor, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))) > 0
 
     def _rim_edge(self, edges: np.ndarray, i: int) -> float:
         tmpl = self.hole_masks[i]
         line = cv2.morphologyEx(tmpl, cv2.MORPH_GRADIENT, np.ones((3, 3), np.uint8)) > 0
-        band = cv2.dilate(line.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+        band = cv2.dilate(line.astype(np.uint8), np.ones((self.kernel(5),) * 2, np.uint8)) > 0
         return float(np.count_nonzero(edges[band])) / max(1.0, float(np.count_nonzero(line)) / 2)
 
     def _pos_tol(self, e: int, mm_per_px: float | None) -> float:
@@ -287,7 +293,7 @@ class GeometryMethod(Method):
         if c.pos_tol_mm and mm_per_px:
             tol = c.pos_tol_mm / mm_per_px  # absolute tolerance from the drawing
         else:
-            tol = max(c.pos_tol_px, c.tol_sigma * self.pos_std[e])
+            tol = max(self.px(c.pos_tol_px), c.tol_sigma * self.pos_std[e])
         return float(max(tol, self.pos_accept[e]))  # never stricter than what the operator accepted
 
     def _dia_tol(self, e: int, mm_per_px: float | None) -> float:
@@ -301,8 +307,8 @@ class GeometryMethod(Method):
     def score(self, s: AlignedPart, sens: float = 1.0, mm_per_px: float | None = None) -> MethodResult:
         """Matches the holes to the nominal ones and checks position, diameter, shape, missing/extra holes, outline."""
         sens = max(float(sens), 1e-3)
-        holes, _ = find_holes(s, self.cfg.hole_min_area_px)
-        pairs, un_e, un_d = _match(self.exp_xy, self.exp_d, holes)
+        holes = self._holes(s)
+        pairs, un_e, un_d = _match(self.exp_xy, self.exp_d, holes, self.scale)
         defects, worst = self._check_matched(holes, pairs, sens, mm_per_px)
         relocated, un_e, un_d = self._check_relocated(holes, un_e, un_d, sens, mm_per_px)
         defects += relocated + self._check_missing(s, un_e) + self._check_extra(holes, un_d, mm_per_px)

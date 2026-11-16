@@ -586,6 +586,7 @@ def test_still_mode_with_a_stop_and_go_belt(make_system):
     wait(lambda: len(s.results.history) >= 3, 120)
     s.stop_inspection()
     assert s.trigger.moving_captures == 0 and all(h["status"] == "OK" for h in s.results.history)
+    assert all(h["shots"] == ["OK"] for h in s.results.history)  # resting part: one averaged image, no vote
     assert not any("did not stop" in n["text"] for n in s.supervisor_notices())
     s.camera.cfg.sim_stop_frames = 0  # the belt no longer stops: parts are captured in motion and reported
     s.start_inspection()
@@ -594,6 +595,21 @@ def test_still_mode_with_a_stop_and_go_belt(make_system):
     assert any("did not stop" in n["text"] for n in s.supervisor_notices())
     s.reset_counts()
     assert s.trigger.moving_captures == 0
+
+
+def test_shots_of_a_resting_part_are_averaged():
+    from qc.inspection import merge_still
+
+    rng = np.random.default_rng(0)
+    clean = np.full((60, 80, 3), 120, np.float32)
+    shots = [np.clip(clean + rng.normal(0, 6, clean.shape), 0, 255).astype(np.uint8) for _ in range(3)]
+    still = [(0.5, 0.4), (0.501, 0.4), (0.5, 0.401)]
+    merged = merge_still(shots, still, 0.004)
+    assert len(merged) == 1 and merged[0].dtype == np.uint8
+    noise = [float(np.std(s.astype(np.float32) - clean)) for s in (shots[0], merged[0])]
+    assert noise[1] < 0.65 * noise[0]  # ≈ 1/√3
+    assert merge_still(shots, [(0.5, 0.4), (0.52, 0.4), (0.54, 0.4)], 0.004) is shots  # part moved → vote
+    assert merge_still(shots[:1], still[:1], 0.004) == shots[:1]
 
 
 def test_capture_mode_switch_via_setup_api(make_system, tmp_path):
