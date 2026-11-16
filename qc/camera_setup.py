@@ -308,6 +308,8 @@ class CameraSetup:
             width, height = out_size or ((frame.shape[1], frame.shape[0]) if frame is not None else (640, 480))
             v_out = path["speed"] * (width if axis == "x" else height) / crop[2]  # output px per second
             e_max = ac.max_blur_px / max(v_out, 1e-6) * 1e6
+            if self.cfg.trigger.mode == "still":  # captured at standstill: no motion blur to limit
+                e_max = float(ac.max_exposure_us)
             product = prof["exposure_us"] * prof["gain"]
             e, g = AS.split_exposure(product, min(ac.max_exposure_us, e_max), ac)
             prof.update(

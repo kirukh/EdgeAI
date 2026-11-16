@@ -218,6 +218,11 @@ class AutoSetupConfig:
     min_exposure_us: int = 100
     max_exposure_us: int = 8000  # upper limit before the belt speed is known
     max_gain: float = 4.0  # more gain = more noise; above that "more light needed"
+    min_gain: float = 1.0  # lowest gain factor (Pi cameras: 1.0; USB: factor of the default gain, may be < 1)
+    # Mains frequency of the lighting (0 = off). Lamps on mains flicker at twice this frequency;
+    # the exposure is then a whole multiple of that period (50 Hz → 10 ms, 20 ms), so every image
+    # gets the same light. Needs max_exposure_us ≥ one period.
+    flicker_free_hz: int = 0
     max_blur_px: float = 0.5  # motion blur limit in output pixels (after zoom)
     max_zoom: float = 2.5  # IMX219 1640×1232 readout → ≥ 656 sensor px for 640 output px
     margin_along: float = 2.0  # crop length along the belt = 2.0 × part size (room for the trigger)
@@ -346,6 +351,9 @@ class AppConfig:
         at_least("target_reference_count", self.target_reference_count, 3)
         at_least("learning.update_after", self.learning.update_after, 0)
         at_least("autosetup.max_zoom", self.autosetup.max_zoom, 1.0)
+        one_of("autosetup.flicker_free_hz", self.autosetup.flicker_free_hz, (0, 50, 60))
+        if not 0 < self.autosetup.min_gain <= self.autosetup.max_gain:
+            errors.append(f"autosetup.min_gain = {self.autosetup.min_gain!r} – must be > 0 and ≤ autosetup.max_gain")
         if errors:
             raise ConfigError("Configuration error(s):\n  - " + "\n  - ".join(errors))
 

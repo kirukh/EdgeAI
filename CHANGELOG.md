@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.3.1 – fine-tuning for the Pi 5 + C310 (2026-11-16)
+
+- **Flicker-free exposure** (`autosetup.flicker_free_hz`, `autosetup.min_gain`): lamps on 50 Hz mains flicker at
+  100 Hz; the automatic camera setup now chooses an exposure that is a whole multiple of 10 ms, so all shots of a
+  part get the same light. The gain makes up the difference, for USB cameras also below the default gain.
+- Trigger mode `still`: the automatic setup no longer shortens the exposure for the belt speed – the part is
+  captured at standstill.
+- Every log line appeared twice in the terminal (a library configured the root logger) – fixed.
+- Preset `config.pi5_usb_c310.json`: exposure 10 ms (max 20 ms), flicker-free 50 Hz, `still_frames` 4,
+  preview 15 fps. Benchmark on the Pi 5: 30 ms per inspection at 640 × 480.
+
 ## 2.3.0 – Raspberry Pi 5 + USB camera (Logitech C310) (2026-11-11)
 
 - **USB camera source** `qc/usb_camera.py` (replaces the minimal OpenCV source):

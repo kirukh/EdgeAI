@@ -37,6 +37,7 @@ def _setup_logging(cfg: AppConfig) -> Path:
     log_dir.mkdir(parents=True, exist_ok=True)
     log = logging.getLogger("qc")
     log.setLevel(logging.INFO)
+    log.propagate = False  # a library may configure the root logger – otherwise every line appears twice
     if not log.handlers:
         fh = RotatingFileHandler(log_dir / "qc.log", maxBytes=1_000_000, backupCount=3, encoding="utf-8")
         fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(message)s"))

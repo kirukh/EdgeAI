@@ -67,9 +67,17 @@ def next_exposure(exposure_us: float, gain: float, level: float, cfg: AutoSetupC
 
 
 def split_exposure(product: float, max_exposure_us: float, cfg: AutoSetupConfig) -> tuple[int, float]:
-    """Exposure × gain product → (exposure, gain): exposure first (no noise), gain only above the limit."""
+    """Exposure × gain product → (exposure, gain): exposure first (no noise), gain only above the limit.
+
+    With ``flicker_free_hz`` the exposure is a whole multiple of the lamp flicker period (half a mains
+    period) whenever the limit allows one period; the gain makes up the difference (also downwards,
+    to ``min_gain``)."""
     e = float(np.clip(product, cfg.min_exposure_us, max_exposure_us))
-    g = float(np.clip(product / e, 1.0, cfg.max_gain))
+    if cfg.flicker_free_hz:
+        period = 1e6 / (2 * cfg.flicker_free_hz)
+        if max_exposure_us >= period:
+            e = period * max(1, min(math.floor(max_exposure_us / period), round(product / period)))
+    g = float(np.clip(product / e, cfg.min_gain, cfg.max_gain))
     return int(round(e)), round(g, 3)
 
 

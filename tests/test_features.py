@@ -245,6 +245,11 @@ def test_autosetup_building_blocks():
     assert e == 8000 and not done
     e, g = AS.split_exposure(16000, 4000, ac)  # above the limit → gain
     assert e == 4000 and g == 4.0
+    mains = AutoSetupConfig(flicker_free_hz=50, max_exposure_us=20000, min_gain=0.25)
+    assert AS.split_exposure(6000, 20000, mains) == (10000, 0.6)  # one flicker period, less gain
+    assert AS.split_exposure(17000, 20000, mains) == (20000, 0.85)
+    assert AS.split_exposure(60000, 20000, mains) == (20000, 3.0)  # limit reached → more gain
+    assert AS.split_exposure(3000, 5000, mains) == (3000, 1.0)  # limit below one period → as before
     crop, zoom = AS.crop_for_path((0.5, 0.5), (0.2, 0.267), "x", ac)
     assert abs(crop[2] - crop[3]) < 1e-9 and 1.0 < zoom <= ac.max_zoom  # square pixels, zoomed in
     assert crop[0] >= 0 and crop[0] + crop[2] <= 1 and crop[1] + crop[3] <= 1
