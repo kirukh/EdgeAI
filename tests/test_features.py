@@ -617,7 +617,10 @@ def test_manual_check_mode_captures_only_on_request(make_system):
     assert s.teach.count == 0  # nothing is captured automatically
     while s.mode == "learning":
         n = s.teach.count
-        lay_part_and_capture()
+        try:
+            lay_part_and_capture()
+        except ValueError:  # the teach-in finished by itself after the last part
+            break
         wait(lambda n=n: s.teach.count > n or s.mode != "learning", 60)
     wait(lambda: s.mode == "idle" and s.model is not None, 120)
     s.start_inspection()
