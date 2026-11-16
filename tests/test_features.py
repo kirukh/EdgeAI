@@ -405,7 +405,10 @@ def test_model_of_the_full_version_still_loads(tmp_path):
     loaded.set_sensitivity({"diff": 0.8})
     assert (old / "meta.json").exists() and not (old / "recipe.json").exists()
     again = QCModel.load(old)
-    assert again.sensitivity == {"geometry": 1.3, "diff": 0.8, "pca": 1.0} and len(again.reference_frames()) == 6
+    assert (
+        again.sensitivity == {"geometry": 1.3, "edge": 1.0, "diff": 0.8, "pca": 1.0}
+        and len(again.reference_frames()) == 6
+    )
     img = shots("A", "front", 1, rng, "missing")[0]
     assert again.inspect(img, False).status == "NOK"
 

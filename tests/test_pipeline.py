@@ -102,7 +102,7 @@ def test_save_load_roundtrip(tmp_path, front_model):
     assert len(loaded.reference_frames()) == 12
     loaded.set_sensitivity({"geometry": 1.4, "unknown": 9})  # saved immediately, unknown keys ignored
     again = QCModel.load(tmp_path / "A-front")
-    assert again.sensitivity == {"geometry": 1.4, "diff": 1.0, "pca": 1.0}
+    assert again.sensitivity == {"geometry": 1.4, "edge": 1.0, "diff": 1.0, "pca": 1.0}
     front_model.save(tmp_path)  # same name → replaced, nothing left over
     assert sorted(p.name for p in tmp_path.iterdir()) == ["A-front"]
 
@@ -131,7 +131,7 @@ def test_web_flow(tmp_path):
         assert client.post("/api/learn/finish").json["ok"]
         wait(lambda: status()["mode"] == "idle")
         models = client.get("/api/models").json
-        assert models and models[0]["methods"] == ["geometry", "diff", "pca"]
+        assert models and models[0]["methods"] == ["geometry", "edge", "diff", "pca"]
         assert client.post("/api/inspect/start", json={"model": models[0]["slug"]}).json["ok"]
         wait(lambda: len(client.get("/api/results").json) >= 4)
         client.post("/api/inspect/stop")

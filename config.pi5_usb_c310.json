@@ -1,8 +1,8 @@
 {
   "camera": {
     "source": "usb:0",
-    "width": 640,
-    "height": 480,
+    "width": 960,
+    "height": 720,
     "usb_capture": [
       1280,
       960
@@ -16,7 +16,7 @@
     "power_line_hz": 50
   },
   "localization": {
-    "work_width": 640,
+    "work_width": 960,
     "rotation_search": "full"
   },
   "trigger": {

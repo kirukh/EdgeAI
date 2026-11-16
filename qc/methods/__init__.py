@@ -28,6 +28,7 @@ from __future__ import annotations
 from ..config import MethodConfig
 from .base import DEFECT_LABELS, METHOD_LABELS, Defect, Method, MethodResult, robust_outliers
 from .diff import DiffMethod
+from .edge import EdgeMethod
 from .geometry import GeometryMethod, Hole, find_holes
 from .pca import PCAMethod
 
@@ -37,6 +38,7 @@ __all__ = [
     "METHOD_LABELS",
     "Defect",
     "DiffMethod",
+    "EdgeMethod",
     "GeometryMethod",
     "Hole",
     "Method",
@@ -47,11 +49,16 @@ __all__ = [
     "robust_outliers",
 ]
 
-METHODS: dict[str, type[Method]] = {"geometry": GeometryMethod, "diff": DiffMethod, "pca": PCAMethod}
+METHODS: dict[str, type[Method]] = {
+    "geometry": GeometryMethod,
+    "edge": EdgeMethod,
+    "diff": DiffMethod,
+    "pca": PCAMethod,
+}
 
 
 def create(name: str, cfg: MethodConfig, scale: float = 1.0) -> Method:
-    """Inspection method by name (``geometry``, ``diff`` or ``pca``)."""
+    """Inspection method by name (``geometry``, ``edge``, ``diff`` or ``pca``)."""
     if name not in METHODS:
         raise ValueError(f"Unknown method '{name}'. Available: {', '.join(METHODS)}")
     return METHODS[name](cfg, scale)

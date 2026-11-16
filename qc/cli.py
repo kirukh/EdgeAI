@@ -273,7 +273,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def method_args(sp: argparse.ArgumentParser) -> None:
-        sp.add_argument("--methods", help="e.g. geometry,diff,pca")
+        sp.add_argument("--methods", help="e.g. geometry,edge,diff,pca")
         sp.add_argument("--diff-rep", help="image representation for the reference comparison")
         sp.add_argument("--pca-rep", help="image representation for the ML anomaly detection")
 

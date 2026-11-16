@@ -7,7 +7,6 @@ document.querySelectorAll(".tabs button").forEach((b) => b.onclick = () => {
 });
 try { const t = localStorage.getItem("qc-tab"); if (t) document.querySelector(`.tabs button[data-tab="${t}"]`)?.click(); } catch (e) {}
 
-const METHOD_KEYS = ["geometry", "diff", "pca"];
 
 // ---------------------------------------------------------------- result
 function showResult(r) {
@@ -157,7 +156,7 @@ async function loadModels() {
   const active = status?.model?.slug;
   $("models").innerHTML = models.length ? models.map((m) => {
     const meth = m.methods.map((x) => esc(opts.methods[x] || x)).join(", ");
-    const sens = METHOD_KEYS.map((k) => `<span>${esc(opts.methods[k])}</span>
+    const sens = m.methods.map((k) => `<span>${esc(opts.methods[k])}</span>
         <input type="range" min="0.5" max="2" step="0.05" value="${m.sensitivity[k] ?? 1}" data-sens="${k}" data-s="${m.slug}">
         <span id="sv-${m.slug}-${k}">×${(m.sensitivity[k] ?? 1).toFixed(2)}</span>`).join("");
     const excl = m.excluded.length ? ` · reference(s) ${m.excluded.map((i) => i + 1).join(", ")} left out` : "";

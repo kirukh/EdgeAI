@@ -261,7 +261,7 @@ class CameraSetup:
                 "The part almost fills the image – parts may be cut off at the edge. Mount the camera "
                 "a little higher (no zoom is possible either way)."
             )
-        if not self.camera.has_autofocus and edge and edge > ac.edge_width_max_px:
+        if not self.camera.has_autofocus and edge and edge > ac.edge_limit(self.cfg.localization.work_width):
             notes.append(
                 f"The image is blurry (edges {edge:.1f} px). This camera has no focus motor: "
                 "turn the lens once by hand (focus assistant), then run the setup again."

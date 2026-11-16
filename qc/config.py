@@ -110,7 +110,7 @@ class MethodConfig:
     """Inspection methods, their image representations and the decision rule."""
 
     # Enabled inspection methods (combined with OR → one method NOK = part NOK)
-    methods: list[str] = field(default_factory=lambda: ["geometry", "diff", "pca"])
+    methods: list[str] = field(default_factory=lambda: ["geometry", "edge", "diff", "pca"])
     # Image representation per method (see qc/representations.py)
     diff_representation: str = "norm"
     pca_representation: str = "edges"
@@ -128,6 +128,13 @@ class MethodConfig:
     pos_tol_mm: float | None = None  # max. hole position deviation
     dia_tol_mm: float | None = None  # max. hole diameter deviation (±)
 
+    # --- Edges: contour, radius, roughness, chamfer (values for 640 px working width) ---
+    edge_tol_px: float = 1.2  # minimum tolerance of the edge position (contour, corner radius)
+    edge_rough_px: float = 0.5  # minimum tolerance of the edge roughness (RMS of the edge jitter)
+    edge_band_tol: float = 0.08  # minimum tolerance of the edge band (chamfer), share of the part contrast
+    edge_min_run_px: float = 8.0  # a deviation counts only over at least this length of the edge
+    edge_band_run_px: float = 24.0  # … for the chamfer: deburring changes over longer stretches than a nick
+
     # --- Reference screening (teach-in) ---
     # Every reference is compared with the OTHER references (leave-one-out). A reference that
     # stands out clearly – usually a defective part taught in by mistake – is excluded and
@@ -144,6 +151,7 @@ class MethodConfig:
     decision: str = "fusion"
     geometry_standalone: float = 1.0  # geometry measurements are reliable → decide alone
     diff_standalone: float = 1.0
+    edge_standalone: float = 1.0  # edge measurements are reliable → decide alone
     pca_standalone: float = 1.5  # ML alone only if clearly above its threshold
 
     # --- Reference image comparison (difference map) ---
@@ -215,6 +223,10 @@ class DriftConfig:
 class AutoSetupConfig:
     """Automatic camera setup."""
 
+    def edge_limit(self, work_width: int) -> float:
+        """Widest edge (10–90 % rise, px) that still counts as sharp at this working resolution."""
+        return self.edge_width_max_px * work_width / 640.0
+
     # Automatic camera setup when a part type is taught in (see qc/autosetup.py)
     enabled: bool = True
     target_level: float = 225.0  # 99.5th percentile of part + surroundings after the setup
@@ -230,7 +242,7 @@ class AutoSetupConfig:
     max_zoom: float = 2.5  # IMX219 1640×1232 readout → ≥ 656 sensor px for 640 output px
     margin_along: float = 2.0  # crop length along the belt = 2.0 × part size (room for the trigger)
     margin_across: float = 1.6  # crop width across the belt = 1.6 × part size (position scatter)
-    edge_width_max_px: float = 3.0  # 10–90 % edge rise above this = image not sharp
+    edge_width_max_px: float = 3.0  # 10–90 % edge rise above this = image not sharp (at 640 px working width)
 
 
 @dataclass

@@ -99,7 +99,7 @@ def test_operator_screen_endpoints(make_system):
     assert next(iter(stream.response)).startswith(b"--frame\r\nContent-Type: image/jpeg")
     stream.close()
     opts = c.get("/api/options").json
-    assert set(opts["methods"]) == {"geometry", "diff", "pca"} and opts["decision"] == "fusion"
+    assert set(opts["methods"]) == {"geometry", "edge", "diff", "pca"} and opts["decision"] == "fusion"
 
     assert c.get("/api/setup/check").json == {"unlocked": False, "pin_required": True}
     h = _unlocked(c, s.cfg.ui.setup_pin)

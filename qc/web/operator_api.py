@@ -11,6 +11,7 @@ from flask.typing import ResponseReturnValue
 
 from .. import archive as qa
 from .. import methods as M
+from ..model import standalone_levels
 from ..system import QCSystem
 from .auth import SetupAuth
 
@@ -86,7 +87,7 @@ def options() -> ResponseReturnValue:
         {
             "methods": M.METHOD_LABELS,
             "decision": cfg.decision,
-            "standalone": {"geometry": cfg.geometry_standalone, "diff": cfg.diff_standalone, "pca": cfg.pca_standalone},
+            "standalone": standalone_levels(cfg),
         }
     )
 

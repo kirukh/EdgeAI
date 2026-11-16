@@ -56,10 +56,12 @@ Camera image
   → Photometric normalisation: background = 0, part = 1
   → Inspection methods                                                   (methods.py)
        geometry  holes + outline vs. learned nominal geometry (sub-pixel)
+       edge      edges along the nominal contour: contour/corner radius, roughness, chamfer
        diff      z-score difference map vs. mean/spread image of the good parts
        pca       ML: PCA subspace of the good parts, reconstruction error = anomaly
   → Decision: fusion of the methods, × sensitivity per method           (model.py)
-  → 3 images per part → majority vote (2nd/3rd only if the 1st is not clearly good)   (inspection.py)
+  → 3 images per part → majority vote (2nd/3rd only if the 1st is not clearly good);
+    stop-and-go belt: the 3 images of the resting part are averaged into one  (inspection.py)
   → OK / NOK + defect type + marking in the image                       (visualize.py)
   → history, CSV log, NOK images, drift monitor                         (results.py, drift.py)
 ```
@@ -73,13 +75,27 @@ Camera image
 | wrong shape (slot/cut-out) | geometry (aspect ratio) | Wrong cut-out shape |
 | extra hole | geometry | Extra hole/cut-out |
 | damaged outline | geometry (mask XOR) | Outline deviation |
+| wrong corner radius, burr, nick in an edge | edge (sub-pixel edge position along the nominal contour) | Edge contour / radius deviates |
+| unclean (chattered) milled edge | edge (jitter of the edge position) | Edge not clean |
+| deburred too deep / not deburred | edge (brightness band behind the edge, relative to the surface) | Chamfer / deburring deviates |
 | scratches, discoloration, anything unexpected | diff, pca | Deviation from reference image / ML anomaly |
 
 **Thresholds without defect examples.** Geometry tolerances come from the spread of the good parts:
 max(minimum tolerance, k·σ). For `diff` and `pca`, leave-one-out measures how far each good part deviates from
 the others, and the threshold is set above that with a safety margin.
 
-**Fusion decision.** A method decides alone only above its stand-alone level (geometry/diff 1.0, ML 1.5); weaker
+**Edges.** `edge` walks along the nominal contour (outline and cut-outs) and reads a brightness profile across
+the edge every 2 px. The edge position is measured to a fraction of a pixel; a remaining shift/rotation of the whole
+part is fitted and removed, and cut-outs are measured where they actually sit (their position is `geometry`'s job).
+The chamfer check compares the band behind the edge with the flat surface next to it – how well a chamfer shows
+depends on the lighting (it must reflect differently from the surface). Tolerances: `edge_tol_px`, `edge_rough_px`,
+`edge_band_tol` are minimums; where the good parts scatter more, the tolerance is wider.
+
+**Resolution.** All pixel settings are given for 640 px working width and scale with `localization.work_width`
+(lengths ×, areas ×²), so a part type can be taught at 960 or 1280 px without retuning. A model keeps the
+resolution it was taught at.
+
+**Fusion decision.** A method decides alone only above its stand-alone level (geometry/edge/diff 1.0, ML 1.5); weaker
 findings need a second method to agree. `"method": {"decision": "or"}` makes every method decide alone.
 
 **Sensitivity per method** (setup area → Models): ×0.5 … ×2 per method and model (> 1 = stricter). It takes effect
@@ -372,9 +388,9 @@ qc/trigger.py              conveyor trigger (one capture per part)
 qc/alignment.py            localisation, alignment, photometric normalisation
 qc/representations.py      image representations (gray, CLAHE, edges, threshold, LAB, HSV …)
 qc/methods/                inspection methods with reference screening: base.py (results, interface), geometry.py,
-                           diff.py, pca.py
+                           edge.py, diff.py, pca.py
 qc/model.py                part type: training (with screening), inspection, fusion decision, save/load
-qc/inspection.py           several images per part, majority vote
+qc/inspection.py           several images per part: majority vote, or averaging for a resting part
 qc/visualize.py            defect marking, heatmap
 qc/teach.py                teach-in session (reference images)
 qc/camera_setup.py         camera profiles, automatic camera setup, focus assistant

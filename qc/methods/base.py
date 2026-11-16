@@ -21,12 +21,16 @@ DEFECT_LABELS = {
     "HOLE_SHAPE": "Wrong cut-out shape",
     "EXTRA_HOLE": "Extra hole/cut-out",
     "OUTLINE": "Outline deviation",
+    "EDGE_SHAPE": "Edge contour / radius deviates",
+    "EDGE_ROUGH": "Edge not clean",
+    "EDGE_BAND": "Chamfer / deburring deviates",
     "SURFACE": "Deviation from reference image",
     "ANOMALY": "ML anomaly",
 }
 
 METHOD_LABELS = {
     "geometry": "Geometry (holes + outline)",
+    "edge": "Edges (contour, radius, chamfer)",
     "diff": "Reference image comparison",
     "pca": "ML anomaly detection (PCA)",
 }

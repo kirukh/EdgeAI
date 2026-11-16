@@ -41,7 +41,7 @@ class EvalRow:
 
 def default_grid(base: MethodConfig) -> list[tuple[str, MethodConfig]]:
     """Configurations compared by ``qc evaluate``: each method with several representations, plus combinations."""
-    grid = [("geometry", replace(base, methods=["geometry"]))]
+    grid = [("geometry", replace(base, methods=["geometry"])), ("edge", replace(base, methods=["edge"]))]
     for r in ["norm", "gray", "clahe", "edges", "canny", "binary", "lab_ab", "hsv_s"]:
         grid.append((f"diff[{r}]", replace(base, methods=["diff"], diff_representation=r)))
     for r in ["norm", "edges", "canny", "binary"]:
@@ -51,6 +51,17 @@ def default_grid(base: MethodConfig) -> list[tuple[str, MethodConfig]]:
         (
             "geometry + diff[norm] + pca[edges]",
             replace(base, methods=["geometry", "diff", "pca"], diff_representation="norm", pca_representation="edges"),
+        )
+    )
+    grid.append(
+        (
+            "geometry + edge + diff[norm] + pca[edges]",
+            replace(
+                base,
+                methods=["geometry", "edge", "diff", "pca"],
+                diff_representation="norm",
+                pca_representation="edges",
+            ),
         )
     )
     return grid

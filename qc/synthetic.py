@@ -54,6 +54,15 @@ PART_TYPES: dict[str, dict[str, Any]] = {
             {"shape": "circle", "x": -40, "y": 65, "r": 14},
         ],
     },
+    "E": {  # milled plate: rounded corners (radius 14) and a deburred edge (chamfer 3 px wide)
+        "size": (300, 180),
+        "corner_radius": 14,
+        "chamfer": 3,
+        "holes": [
+            {"shape": "circle", "x": -90, "y": -20, "r": 16},
+            {"shape": "circle", "x": 85, "y": 30, "r": 16},
+        ],
+    },
 }
 
 
@@ -82,6 +91,8 @@ def _random_inside(
 
 
 DEFECTS = ["missing", "blind", "position", "diameter", "extra", "scratch", "stain", "corner"]
+# Edge defects of milled/deburred parts (not part of the random defects of the simulator)
+EDGE_DEFECTS = ["radius", "rough_edge", "chamfer"]
 
 DEFECT_LABELS = {
     "missing": "Hole missing",
@@ -92,6 +103,9 @@ DEFECT_LABELS = {
     "scratch": "Scratch",
     "stain": "Discoloration/rust",
     "corner": "Damaged corner",
+    "radius": "Wrong corner radius",
+    "rough_edge": "Rough milled edge",
+    "chamfer": "Deburred too deep",
 }
 
 
@@ -109,6 +123,30 @@ class PartInstance:
     corner_idx: int = 0
     defect: str | None = None
     texture_seed: int = 0
+    corner_radii: list[float] = field(default_factory=list)  # per outline corner (empty = sharp corners)
+    chamfer: float = 0.0  # width of the deburred band along the outer edge (px)
+    # defects of the edge: rough stretch {"corner": i, "amp": px} / deeper chamfer {"x", "y", "radius", "width"}
+    rough_edge: dict[str, Any] | None = None
+    chamfer_defect: dict[str, Any] | None = None
+
+
+def _edge_defect(part: PartInstance, defect: str, rng: np.random.Generator) -> None:
+    """Defects of milled/deburred edges (``EDGE_DEFECTS``)."""
+    poly = part.outline
+    if defect == "radius":  # one corner milled with a clearly different radius
+        i, r = int(rng.integers(len(poly))), part.corner_radii[0]
+        part.corner_radii[i] = r + rng.uniform(7, 11) if r < 12 or rng.random() < 0.5 else r - rng.uniform(7, 10)
+    elif defect == "rough_edge":  # chatter marks: the edge after one corner is jagged
+        part.rough_edge = {"corner": int(rng.integers(len(poly))), "amp": float(rng.uniform(1.6, 2.4))}
+    elif defect == "chamfer":  # deburred too deep along a stretch of the edge
+        i = int(rng.integers(len(poly)))
+        mid = (poly[i] + poly[(i + 1) % len(poly)]) / 2
+        part.chamfer_defect = {
+            "x": float(mid[0]),
+            "y": float(mid[1]),
+            "radius": float(rng.uniform(40, 60)),
+            "width": part.chamfer + float(rng.uniform(4, 6)),
+        }
 
 
 def make_part(type_name: str = "A", defect: str | None = None, rng: np.random.Generator | None = None) -> PartInstance:
@@ -122,6 +160,8 @@ def make_part(type_name: str = "A", defect: str | None = None, rng: np.random.Ge
         h["y"] += rng.normal(0, 0.5)
     poly = outline_of(spec)
     part = PartInstance(type_name, poly, holes, defect=defect, texture_seed=int(rng.integers(1 << 30)))
+    part.corner_radii = [float(spec.get("corner_radius", 0.0))] * len(poly)
+    part.chamfer = float(spec.get("chamfer", 0.0))
 
     if defect is None:
         return part
@@ -163,9 +203,41 @@ def make_part(type_name: str = "A", defect: str | None = None, rng: np.random.Ge
     elif defect == "corner":
         part.corner_cut = rng.uniform(26, 40)
         part.corner_idx = int(rng.integers(len(poly)))
+    elif defect in EDGE_DEFECTS:
+        _edge_defect(part, defect, rng)
     else:
         raise ValueError(f"Unknown defect: {defect}")
     return part
+
+
+def edge_polygon(part: PartInstance, rng: np.random.Generator) -> np.ndarray:
+    """Outline with rounded corners (``corner_radii``) and, for a rough edge, a jagged stretch."""
+    poly, n = part.outline, len(part.outline)
+    radii = part.corner_radii or [0.0] * n
+    pts: list[np.ndarray] = []
+    for i in range(n):
+        v, prv, nxt = poly[i], poly[i - 1], poly[(i + 1) % n]
+        r = radii[i]
+        if r > 0.5:
+            u1, u2 = (prv - v) / np.linalg.norm(prv - v), (nxt - v) / np.linalg.norm(nxt - v)
+            half = math.acos(float(np.clip(u1 @ u2, -1, 1))) / 2
+            t = r / math.tan(half)  # distance vertex → tangent points
+            centre = v + (u1 + u2) / np.linalg.norm(u1 + u2) * r / math.sin(half)
+            a0, a1 = v + u1 * t - centre, v + u2 * t - centre
+            ang0, ang1 = math.atan2(a0[1], a0[0]), math.atan2(a1[1], a1[0])
+            d = (ang1 - ang0 + math.pi) % (2 * math.pi) - math.pi  # the short way round
+            pts += [
+                centre + r * np.array([math.cos(ang0 + d * k / 12), math.sin(ang0 + d * k / 12)]) for k in range(13)
+            ]
+        else:
+            pts.append(v.astype(np.float64))
+        if part.rough_edge and part.rough_edge["corner"] == i:  # jagged stretch on the edge to the next corner
+            edge = nxt - v
+            length = float(np.linalg.norm(edge))
+            normal = np.array([-edge[1], edge[0]]) / length
+            for s in np.arange(0.3 * length, 0.7 * length, 3.0):
+                pts.append(v + edge * s / length + normal * rng.uniform(-1, 1) * part.rough_edge["amp"])
+    return np.array(pts, np.float64)
 
 
 def _draw_hole(
@@ -196,12 +268,13 @@ Layers = tuple[np.ndarray, np.ndarray, tuple[float, float]]  # colour layer, alp
 
 def render_layers(part: PartInstance, lighting: str, scale: float = 1.0) -> Layers:
     """Renders the part in local coordinates → (colour layer, alpha, centre)."""
-    poly = part.outline
     pad = 50
-    ext = np.abs(poly).max(0)
+    ext = np.abs(part.outline).max(0)
     W, H = int(2 * ext[0] + 2 * pad), int(2 * ext[1] + 2 * pad)
     cx, cy = W / 2, H / 2
     rng = np.random.default_rng(part.texture_seed)
+    plain = not (any(part.corner_radii) or part.rough_edge)
+    poly = part.outline if plain else edge_polygon(part, np.random.default_rng(part.texture_seed + 1))
 
     alpha: np.ndarray = np.zeros((H, W), np.float32)
     pts = poly + np.array([cx, cy])  # shift the polygon (NumPy vector addition)
@@ -229,6 +302,18 @@ def render_layers(part: PartInstance, lighting: str, scale: float = 1.0) -> Laye
     layer: np.ndarray = base[None, None, :] + tex[:, :, None]
 
     m: np.ndarray
+    if part.chamfer or part.chamfer_defect:  # deburred band along the outer edge: reflects the light differently
+        solid = np.zeros((H, W), np.float32)
+        cv2.fillPoly(solid, [(pts * 8).round().astype(np.int32)], 1.0, cv2.LINE_AA, shift=3)
+        depth = cv2.distanceTransform((solid > 0.5).astype(np.uint8), cv2.DIST_L2, 5)
+        width = np.full((H, W), part.chamfer, np.float32)
+        if part.chamfer_defect:
+            cd = part.chamfer_defect
+            yy, xx = np.mgrid[0:H, 0:W]
+            width[np.hypot(xx - cx - cd["x"], yy - cy - cd["y"]) < cd["radius"]] = cd["width"]
+        band = np.clip(width - depth + 0.5, 0, 1) * (solid > 0.5)
+        layer = layer + (30 if lighting == "front" else 8) * band[:, :, None]
+
     for h in part.blind_holes:
         m = np.zeros((H, W), np.float32)
         _draw_hole(m, h, cx, cy, 1.0)

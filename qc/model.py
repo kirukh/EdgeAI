@@ -41,7 +41,7 @@ from .config import LocalizationConfig, MethodConfig, _merge
 from .visualize import annotate
 
 MIN_REFERENCES = 3
-METHOD_NAMES = ("geometry", "diff", "pca")
+METHOD_NAMES = ("geometry", "edge", "diff", "pca")
 POOR_ALIGNMENT = 0.9  # normalised cross-correlation of a reference with the mean image
 FORMAT = 4
 # Data of the part type kept next to the model and carried over to new versions (learning.py)
@@ -103,7 +103,12 @@ def px_scale(loc: LocalizationConfig) -> float:
 
 def standalone_levels(cfg: MethodConfig) -> dict[str, float]:
     """Score above which a method decides NOK on its own (fusion rule)."""
-    return {"geometry": cfg.geometry_standalone, "diff": cfg.diff_standalone, "pca": cfg.pca_standalone}
+    return {
+        "geometry": cfg.geometry_standalone,
+        "edge": cfg.edge_standalone,
+        "diff": cfg.diff_standalone,
+        "pca": cfg.pca_standalone,
+    }
 
 
 def decide(results: list[M.MethodResult], cfg: MethodConfig) -> tuple[bool, list[M.MethodResult]]:
@@ -129,7 +134,7 @@ def merge_defects(results: list[M.MethodResult]) -> list[M.Defect]:
     """Defects of the decisive methods; reports of the same location are merged
     (geometry first – it gives the most specific description)."""
     shown: list[M.Defect] = []
-    priority = {"geometry": 0, "diff": 1, "pca": 2}
+    priority = {"geometry": 0, "edge": 1, "diff": 2, "pca": 3}
     for r in sorted(results, key=lambda r: priority.get(r.method, 9)):
         for d in r.defects:
             cx, cy = d.bbox[0] + d.bbox[2] / 2, d.bbox[1] + d.bbox[3] / 2
@@ -367,7 +372,7 @@ class QCModel:
 
         suspects: dict[int, list[str]] = {}
         excludable: set[int] = set()
-        order = {"geometry": 0, "diff": 1, "pca": 2}
+        order = {"geometry": 0, "edge": 1, "diff": 2, "pca": 3}
         for mname in sorted(method_cfg.methods, key=lambda m: order.get(m, 9)):
             m = M.create(mname, method_cfg, px_scale(loc_cfg))
             m.fit(aligned, accepted or set())

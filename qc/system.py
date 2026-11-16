@@ -458,7 +458,7 @@ class QCSystem:
             edge = self.teach.edge_width()
             if edge is not None:
                 prof["edge_width_px"] = round(edge, 2)
-                prof["sharp"] = edge <= self.cfg.autosetup.edge_width_max_px
+                prof["sharp"] = edge <= self.cfg.autosetup.edge_limit(self.cfg.localization.work_width)
             model.camera_profile = prof
             # a new teach-in starts fresh (no accepted parts of the old version); the old one can be restored
             self.models.save(model, keep_previous=True, keep_side_data=False)
@@ -483,7 +483,8 @@ class QCSystem:
             self.log(
                 "warn",
                 f"The image is not sharp (edges {prof['edge_width_px']} px wide, should be ≤ "
-                f"{self.cfg.autosetup.edge_width_max_px}). Focus the lens once (focus assistant), "
+                f"{self.cfg.autosetup.edge_limit(self.cfg.localization.work_width):g}). "
+                "Focus the lens once (focus assistant), "
                 "then teach in again – detection is less precise this way.",
             )
 

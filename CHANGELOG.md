@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.4.0 – edge inspection, free working resolution, averaging at standstill (2026-11-16)
+
+- **New method `edge`** (`qc/methods/edge.py`, enabled by default) for milled and deburred parts: a brightness
+  profile across the edge every 2 px along the nominal contour (outline and cut-outs) gives
+  - the sub-pixel **edge position** → wrong corner radius, burr, nick (`Edge contour / radius deviates`),
+  - the **roughness** of the edge → unclean milled edge (`Edge not clean`),
+  - the **band behind the edge** relative to the surface → deburred too deep or not at all
+    (`Chamfer / deburring deviates`).
+  Tolerances per contour point from the good parts, bounded by leave-one-out; deviations accepted by the operator
+  are tolerated locally. 2 ms per part. Models taught before keep their methods – teach in again to use it.
+  Simulated parts (640 px, 0 false alarms in 900 good parts): radius ±5 px of 14 px 100 %, rough edge 100 %,
+  chamfer 4–6 px too wide 82–100 % (weakest along brush marks). Without `edge`: chamfer 0 %, rough edge ~45 %.
+- **Working resolution is free**: all pixel settings of the methods scale with `localization.work_width`
+  (identical results at 640 px). Preset `config.pi5_usb_c310.json` now works at **960 × 720**.
+- **Trigger mode `still`**: the 3 shots of the resting part are averaged into one image with less noise (teach-in
+  and inspection, `inspection.average_still`); a part that did not stop is voted on as before.
+- Simulator: part type `E` (rounded corners, chamfer) and the edge defects `radius`, `rough_edge`, `chamfer`.
+- Setup page shows the sensitivity sliders of the methods a model really has.
+
 ## 2.3.1 – fine-tuning for the Pi 5 + C310 (2026-11-16)
 
 - **Flicker-free exposure** (`autosetup.flicker_free_hz`, `autosetup.min_gain`): lamps on 50 Hz mains flicker at
