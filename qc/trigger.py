@@ -1,12 +1,14 @@
 """Conveyor trigger: fires exactly one capture per part.
 
-Two modes (``trigger.mode``):
+Three modes (``trigger.mode``):
 
 * ``pass``  – continuous belt: capture when the part crosses the image centre, or when it rests
   inside the centre band.
 * ``still`` – stop-and-go belt: capture only once the part has rested inside the centre band for
   ``still_frames`` frames, so the image is never taken while the part moves or brakes. A part that
   leaves the band without stopping is still captured (in motion) and counted in ``moving_captures``.
+* ``manual`` – no belt: the trigger never fires. A part is laid under the camera and captured with
+  the button (``QCSystem.manual_capture``); the trigger only reports whether a part is visible.
 """
 
 from __future__ import annotations
@@ -49,6 +51,9 @@ class PartTrigger:
         pos = det.centroid[axis] / size - 0.5 if det is not None else None
 
         fire = False
+        if self.cfg.mode == "manual":
+            self.prev_pos = pos
+            return False
         if det is not None and pos is not None and abs(pos) < self.cfg.center_band_ratio and det.complete:
             self.misses = 0
             self.track.append(pos)

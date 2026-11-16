@@ -99,6 +99,8 @@ class TriggerConfig:
     # "pass": capture when the part crosses the image centre (also while it moves);
     # "still": stop-and-go belt – capture only once the part rests in the centre band (sharp image).
     # A part that does not stop is still captured when it leaves the band (and counted).
+    # "manual": no belt – lay a part under the camera and capture it with the button; nothing is
+    # captured automatically.
     mode: str = "pass"
     still_frames: int = 3  # "still": frames without movement before the capture
     detect_width: int = 320  # resolution for the fast part detection
@@ -352,7 +354,7 @@ class AppConfig:
         one_of("camera.usb_format", self.camera.usb_format, ("MJPG", "YUYV"))
         one_of("camera.power_line_hz", self.camera.power_line_hz, (0, 50, 60))
         one_of("trigger.axis", self.trigger.axis, ("x", "y"))
-        one_of("trigger.mode", self.trigger.mode, ("pass", "still"))
+        one_of("trigger.mode", self.trigger.mode, ("pass", "still", "manual"))
         at_least("trigger.still_frames", self.trigger.still_frames, 2)
         for m in self.method.methods:
             one_of("method.methods[]", m, tuple(METHODS))

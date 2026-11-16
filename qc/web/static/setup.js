@@ -68,6 +68,7 @@ function render(s) {
 
   $("triggerHint").textContent = s.continuous
     ? (s.mode === "idle" ? "Trigger inactive (start learning or inspection mode first)"
+      : s.trigger_mode === "manual" ? "Manual check – lay a part under the camera and press “Manual capture”"
       : s.armed ? (s.trigger_mode === "still" ? "Trigger armed – waiting for a part to stop in the centre" : "Trigger armed – waiting for the next part")
       : "Part captured – waiting until it leaves the image")
     : "Image folder: automatic in inspection mode, click to capture in learning mode";

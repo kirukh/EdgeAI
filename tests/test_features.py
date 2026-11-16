@@ -600,6 +600,39 @@ def test_still_mode_with_a_stop_and_go_belt(make_system):
     assert s.trigger.moving_captures == 0
 
 
+def test_manual_check_mode_captures_only_on_request(make_system):
+    """No belt: a part is laid under the camera and checked with the capture button."""
+    s = make_system(sim_defect_rate=0.0)
+    s.set_trigger_mode("manual")
+    s.start()
+
+    def lay_part_and_capture() -> None:
+        s.camera.hold_part(True)  # a new good part lies still under the camera
+        s._wait_frames(3)
+        s.manual_capture()
+
+    s.start_learning("Plate", auto_finish=True)
+    s.teach.target = 4
+    s._wait_frames(40)
+    assert s.teach.count == 0  # nothing is captured automatically
+    while s.mode == "learning":
+        n = s.teach.count
+        lay_part_and_capture()
+        wait(lambda n=n: s.teach.count > n or s.mode != "learning", 60)
+    wait(lambda: s.mode == "idle" and s.model is not None, 120)
+    s.start_inspection()
+    s._wait_frames(40)
+    assert not s.results.history
+    lay_part_and_capture()
+    wait(lambda: len(s.results.history) == 1, 60)
+    s._wait_frames(20)
+    assert [h["status"] for h in s.results.history] == ["OK"]  # one capture → one result
+    assert s.results.history[0]["shots"] == ["OK"]  # the resting part: 3 images averaged into one
+    s.stop_inspection()
+    with pytest.raises(ValueError):
+        s.set_trigger_mode("sometimes")
+
+
 def test_shots_of_a_resting_part_are_averaged():
     from qc.inspection import merge_still
 
@@ -623,6 +656,8 @@ def test_capture_mode_switch_via_setup_api(make_system, tmp_path):
     tok = c.post("/api/setup/unlock", json={"pin": s.cfg.ui.setup_pin}).json["token"]
     h = {"X-Setup-Token": tok}
     assert c.post("/api/trigger-mode", json={"mode": "sometimes"}, headers=h).status_code == 400
+    assert c.post("/api/trigger-mode", json={"mode": "manual"}, headers=h).json["ok"]
+    assert c.get("/api/status").json["trigger_mode"] == "manual"
     assert c.post("/api/trigger-mode", json={"mode": "still"}, headers=h).json["ok"]
     assert c.get("/api/status").json["trigger_mode"] == "still"
     assert AppConfig.load(tmp_path / "config.json").trigger.mode == "still"

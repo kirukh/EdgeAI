@@ -223,9 +223,17 @@ class QCSystem:
 
     def _on_part(self, frame: np.ndarray, manual: bool) -> None:
         """A part was triggered: during inspection collect further shots while it passes."""
-        averaging = self.cfg.trigger.mode == "still" and self.cfg.inspection.average_still and not manual
+        # the part rests: stop-and-go belt (automatic capture) or a part laid under the camera (button)
+        resting = (self.cfg.trigger.mode == "still" and not manual) or (self.cfg.trigger.mode == "manual" and manual)
+        averaging = resting and self.cfg.inspection.average_still
         if self.camera.continuous and (self.mode == "inspecting" or averaging):
-            self._burst = {"shots": [frame], "n": self.shots_per_part, "pos": [self.trigger.position], "avg": averaging}
+            self._burst = {
+                "shots": [frame],
+                "n": self.shots_per_part,
+                "pos": [self.trigger.position],
+                "avg": averaging,
+                "manual": manual,
+            }
         else:
             self._submit([frame], manual)
 
@@ -239,7 +247,7 @@ class QCSystem:
         if len(b["shots"]) >= b["n"] or not self.trigger.part_complete:
             self._burst = None
             shots = merge_still(b["shots"], b["pos"], STILL_TOLERANCE) if b["avg"] else b["shots"]
-            self._submit(shots, False)
+            self._submit(shots, b["manual"])
 
     def _submit(self, shots: list[np.ndarray], manual: bool) -> None:
         """Hands a captured part to the inspection thread."""
@@ -376,15 +384,20 @@ class QCSystem:
 
     def set_trigger_mode(self, mode: str) -> None:
         """When the image is taken: "pass" = as the part crosses the image centre (continuous belt),
-        "still" = once it rests in the centre band (stop-and-go belt). Saved in config.json."""
-        if mode not in ("pass", "still"):
-            raise ValueError("Capture mode must be pass (part passes through) or still (part stops in the centre).")
+        "still" = once it rests in the centre band (stop-and-go belt), "manual" = only with the capture
+        button (a part laid under the camera, no belt). Saved in config.json."""
+        if mode not in ("pass", "still", "manual"):
+            raise ValueError("Capture mode must be pass (part passes through), still (part stops) or manual (button).")
         with self.lock:
             self._require_idle()
             self.cfg.trigger.mode = mode
             self.trigger.armed, self.trigger.prev_pos, self.trigger.moving_captures = True, None, 0
             self.trigger.track.clear()
-        text = "while the part passes the centre" if mode == "pass" else "when the part rests in the centre"
+        text = {
+            "pass": "while the part passes the centre",
+            "still": "when the part rests in the centre",
+            "manual": "only with the capture button (manual check)",
+        }[mode]
         self._save_trigger_setting("mode", mode, f"Capture {text}")
 
     def _save_trigger_setting(self, key: str, value: str, text: str) -> None:

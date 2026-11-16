@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.4.1 – manual check (2026-11-16)
+
+- **Capture mode `manual`** (`trigger.mode`, setup area → "Take the picture"): no belt – lay a part under the camera
+  and press *Capture* (operator screen, or the space bar). Nothing is captured automatically. The 3 images of the
+  resting part are averaged, then the part is inspected as usual; teach-in works the same way, one capture per
+  good part.
+
 ## 2.4.0 – edge inspection, free working resolution, averaging at standstill (2026-11-16)
 
 - **New method `edge`** (`qc/methods/edge.py`, enabled by default) for milled and deburred parts: a brightness
