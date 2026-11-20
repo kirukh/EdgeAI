@@ -27,6 +27,8 @@ What cannot be automated: turning a lens by hand, moving the camera, the light i
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
+from typing import Any
 
 import cv2
 import numpy as np
@@ -65,9 +67,17 @@ def next_exposure(exposure_us: float, gain: float, level: float, cfg: AutoSetupC
 
 
 def split_exposure(product: float, max_exposure_us: float, cfg: AutoSetupConfig) -> tuple[int, float]:
-    """Exposure × gain product → (exposure, gain): exposure first (no noise), gain only above the limit."""
+    """Exposure × gain product → (exposure, gain): exposure first (no noise), gain only above the limit.
+
+    With ``flicker_free_hz`` the exposure is a whole multiple of the lamp flicker period (half a mains
+    period) whenever the limit allows one period; the gain makes up the difference (also downwards,
+    to ``min_gain``)."""
     e = float(np.clip(product, cfg.min_exposure_us, max_exposure_us))
-    g = float(np.clip(product / e, 1.0, cfg.max_gain))
+    if cfg.flicker_free_hz:
+        period = 1e6 / (2 * cfg.flicker_free_hz)
+        if max_exposure_us >= period:
+            e = period * max(1, min(math.floor(max_exposure_us / period), round(product / period)))
+    g = float(np.clip(product / e, cfg.min_gain, cfg.max_gain))
     return int(round(e)), round(g, 3)
 
 
@@ -117,7 +127,7 @@ def part_extent(contour: np.ndarray) -> tuple[float, float, float]:
     return float(cx), float(cy), 2.0 * float(r)
 
 
-def to_sensor(u: float, v: float, out_size: tuple[int, int], crop) -> tuple[float, float]:
+def to_sensor(u: float, v: float, out_size: tuple[int, int], crop: Sequence[float]) -> tuple[float, float]:
     """Pixel in the output image → position as a fraction of the full sensor."""
     x, y, w, h = crop
     return x + u / out_size[0] * w, y + v / out_size[1] * h
@@ -138,7 +148,7 @@ def crop_for_path(
     return (round(x, 5), round(y, 5), round(f, 5), round(f, 5)), round(1.0 / f, 3)
 
 
-def path_from_track(points: list[tuple[float, float, float]]) -> dict | None:
+def path_from_track(points: list[tuple[float, float, float]]) -> dict[str, Any] | None:
     """Belt direction and speed from the centroid track of one passing part.
     ``points`` = (time s, x, y) in sensor fractions. Returns None if the part did not move."""
     if len(points) < 3:

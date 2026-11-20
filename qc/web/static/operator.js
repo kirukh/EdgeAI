@@ -111,6 +111,13 @@ $("sStart").onclick = async () => {
   await api("api/inspect/start", "POST", { model: slug });
 };
 $("sCapture").onclick = () => api("api/capture", "POST");
+// manual check: the space bar captures (not while typing in a field)
+document.addEventListener("keydown", (e) => {
+  const typing = ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
+  if (e.code !== "Space" || typing || status?.trigger_mode !== "manual" || $("sCapture").classList.contains("hidden")) return;
+  e.preventDefault();
+  $("sCapture").click();
+});
 $("sBatch").onclick = async () => {
   const parts = status.counts.OK + status.counts.NOK;
   const label = prompt(`Finish batch?\n${parts} part(s) will be saved as a ZIP file and the counters reset.\n\nBatch name:`,
@@ -206,7 +213,8 @@ function renderWiz(s) {
         <div id="wPath" class="notices"></div>
         <div id="wFailed" class="notices"></div>
         <p>Now run <b>${L.target} good parts</b> over the conveyor, each one placed a bit differently.
-           Every part is captured automatically in the middle of the picture.</p>
+           ${s.trigger_mode === "manual" ? "Lay each part under the camera and press <b>Capture</b> (or the space bar)."
+             : "Every part is captured automatically in the middle of the picture."}</p>
         <div class="count" id="wCount"></div>
         <div class="progress"><i id="wBar"></i></div>
         <div class="thumbs" id="wThumbs" title="Tap a picture to remove it (e.g. a defective part slipped in)"></div>
@@ -254,7 +262,11 @@ function renderSimple(s) {
   $("sBatch").disabled = ["training", "learning"].includes(s.mode) || !(s.counts.OK + s.counts.NOK);
   const active = ["learning", "inspecting"].includes(s.mode);
   $("sCapture").classList.toggle("hidden", !active);
-  $("sTrig").textContent = !active ? "" : s.continuous ? (s.armed ? "Waiting for the next part …" : "Part captured") : "";
+  const byHand = s.trigger_mode === "manual";
+  $("sCapture").textContent = byHand ? "● Capture (space bar)" : "Capture now";
+  $("sCapture").classList.toggle("go", byHand);
+  $("sTrig").textContent = !active ? "" : byHand ? "Lay a part under the camera, then capture"
+    : s.continuous ? (s.armed ? "Waiting for the next part …" : "Part captured") : "";
   const c = s.counts, total = c.OK + c.NOK;
   $("sOK").textContent = c.OK; $("sNOK").textContent = c.NOK;
   $("sRate").textContent = total ? `${(100 * c.NOK / total).toFixed(1)} %` : "–";

@@ -13,13 +13,16 @@ from __future__ import annotations
 
 import copy
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
 
 # Dimensions in pixels relative to a 640 px wide image
-PART_TYPES: dict[str, dict] = {
+PART_TYPES: dict[str, dict[str, Any]] = {
     "A": {  # metal plate with two holes
         "size": (300, 170),
         "holes": [
@@ -51,10 +54,19 @@ PART_TYPES: dict[str, dict] = {
             {"shape": "circle", "x": -40, "y": 65, "r": 14},
         ],
     },
+    "E": {  # milled plate: rounded corners (radius 14) and a deburred edge (chamfer 3 px wide)
+        "size": (300, 180),
+        "corner_radius": 14,
+        "chamfer": 3,
+        "holes": [
+            {"shape": "circle", "x": -90, "y": -20, "r": 16},
+            {"shape": "circle", "x": 85, "y": 30, "r": 16},
+        ],
+    },
 }
 
 
-def outline_of(spec: dict) -> np.ndarray:
+def outline_of(spec: dict[str, Any]) -> np.ndarray:
     """Outline polygon of a part type in local coordinates (centre = 0,0)."""
     if "outline" in spec:
         return np.array(spec["outline"], np.float64)
@@ -62,18 +74,25 @@ def outline_of(spec: dict) -> np.ndarray:
     return np.array([[-pw / 2, -ph / 2], [pw / 2, -ph / 2], [pw / 2, ph / 2], [-pw / 2, ph / 2]], np.float64)
 
 
-def _random_inside(rng, poly: np.ndarray, margin: float, extra_ok=lambda x, y: True):
+def _random_inside(
+    rng: np.random.Generator,
+    poly: np.ndarray,
+    margin: float,
+    extra_ok: Callable[[float, float], bool] = lambda _x, _y: True,
+) -> tuple[float, float]:
     """Random point inside the polygon with at least ``margin`` px distance to the edge."""
     cnt = poly.astype(np.float32).reshape(-1, 1, 2)
     (x0, y0), (x1, y1) = poly.min(0), poly.max(0)
     for _ in range(500):
         x, y = rng.uniform(x0, x1), rng.uniform(y0, y1)
         if cv2.pointPolygonTest(cnt, (float(x), float(y)), True) >= margin and extra_ok(x, y):
-            return x, y
+            return float(x), float(y)
     return float(poly[:, 0].mean()), float(poly[:, 1].mean())
 
 
 DEFECTS = ["missing", "blind", "position", "diameter", "extra", "scratch", "stain", "corner"]
+# Edge defects of milled/deburred parts (not part of the random defects of the simulator)
+EDGE_DEFECTS = ["radius", "rough_edge", "chamfer"]
 
 DEFECT_LABELS = {
     "missing": "Hole missing",
@@ -84,24 +103,54 @@ DEFECT_LABELS = {
     "scratch": "Scratch",
     "stain": "Discoloration/rust",
     "corner": "Damaged corner",
+    "radius": "Wrong corner radius",
+    "rough_edge": "Rough milled edge",
+    "chamfer": "Deburred too deep",
 }
 
 
 @dataclass
 class PartInstance:
+    """A synthetic part: outline, holes and optional surface defects in local coordinates."""
+
     type_name: str
     outline: np.ndarray  # outline polygon (local coordinates)
-    holes: list[dict]  # through holes
-    blind_holes: list[dict] = field(default_factory=list)
-    scratches: list[dict] = field(default_factory=list)
-    stains: list[dict] = field(default_factory=list)
+    holes: list[dict[str, Any]]  # through holes
+    blind_holes: list[dict[str, Any]] = field(default_factory=list)
+    scratches: list[dict[str, Any]] = field(default_factory=list)
+    stains: list[dict[str, Any]] = field(default_factory=list)
     corner_cut: float = 0.0
     corner_idx: int = 0
     defect: str | None = None
     texture_seed: int = 0
+    corner_radii: list[float] = field(default_factory=list)  # per outline corner (empty = sharp corners)
+    chamfer: float = 0.0  # width of the deburred band along the outer edge (px)
+    # defects of the edge: rough stretch {"corner": i, "amp": px} / deeper chamfer {"x", "y", "radius", "width"}
+    rough_edge: dict[str, Any] | None = None
+    chamfer_defect: dict[str, Any] | None = None
+
+
+def _edge_defect(part: PartInstance, defect: str, rng: np.random.Generator) -> None:
+    """Defects of milled/deburred edges (``EDGE_DEFECTS``)."""
+    poly = part.outline
+    if defect == "radius":  # one corner milled with a clearly different radius
+        i, r = int(rng.integers(len(poly))), part.corner_radii[0]
+        part.corner_radii[i] = r + rng.uniform(7, 11) if r < 12 or rng.random() < 0.5 else r - rng.uniform(7, 10)
+    elif defect == "rough_edge":  # chatter marks: the edge after one corner is jagged
+        part.rough_edge = {"corner": int(rng.integers(len(poly))), "amp": float(rng.uniform(1.6, 2.4))}
+    elif defect == "chamfer":  # deburred too deep along a stretch of the edge
+        i = int(rng.integers(len(poly)))
+        mid = (poly[i] + poly[(i + 1) % len(poly)]) / 2
+        part.chamfer_defect = {
+            "x": float(mid[0]),
+            "y": float(mid[1]),
+            "radius": float(rng.uniform(40, 60)),
+            "width": part.chamfer + float(rng.uniform(4, 6)),
+        }
 
 
 def make_part(type_name: str = "A", defect: str | None = None, rng: np.random.Generator | None = None) -> PartInstance:
+    """Synthetic part of a type, optionally with one defect (see ``DEFECTS``), with small natural variation."""
     rng = rng or np.random.default_rng()
     spec = PART_TYPES[type_name]
     holes = copy.deepcopy(spec["holes"])
@@ -111,6 +160,8 @@ def make_part(type_name: str = "A", defect: str | None = None, rng: np.random.Ge
         h["y"] += rng.normal(0, 0.5)
     poly = outline_of(spec)
     part = PartInstance(type_name, poly, holes, defect=defect, texture_seed=int(rng.integers(1 << 30)))
+    part.corner_radii = [float(spec.get("corner_radius", 0.0))] * len(poly)
+    part.chamfer = float(spec.get("chamfer", 0.0))
 
     if defect is None:
         return part
@@ -152,12 +203,46 @@ def make_part(type_name: str = "A", defect: str | None = None, rng: np.random.Ge
     elif defect == "corner":
         part.corner_cut = rng.uniform(26, 40)
         part.corner_idx = int(rng.integers(len(poly)))
+    elif defect in EDGE_DEFECTS:
+        _edge_defect(part, defect, rng)
     else:
         raise ValueError(f"Unknown defect: {defect}")
     return part
 
 
-def _draw_hole(img, h, cx, cy, value, thickness=cv2.FILLED):
+def edge_polygon(part: PartInstance, rng: np.random.Generator) -> np.ndarray:
+    """Outline with rounded corners (``corner_radii``) and, for a rough edge, a jagged stretch."""
+    poly, n = part.outline, len(part.outline)
+    radii = part.corner_radii or [0.0] * n
+    pts: list[np.ndarray] = []
+    for i in range(n):
+        v, prv, nxt = poly[i], poly[i - 1], poly[(i + 1) % n]
+        r = radii[i]
+        if r > 0.5:
+            u1, u2 = (prv - v) / np.linalg.norm(prv - v), (nxt - v) / np.linalg.norm(nxt - v)
+            half = math.acos(float(np.clip(u1 @ u2, -1, 1))) / 2
+            t = r / math.tan(half)  # distance vertex → tangent points
+            centre = v + (u1 + u2) / np.linalg.norm(u1 + u2) * r / math.sin(half)
+            a0, a1 = v + u1 * t - centre, v + u2 * t - centre
+            ang0, ang1 = math.atan2(a0[1], a0[0]), math.atan2(a1[1], a1[0])
+            d = (ang1 - ang0 + math.pi) % (2 * math.pi) - math.pi  # the short way round
+            pts += [
+                centre + r * np.array([math.cos(ang0 + d * k / 12), math.sin(ang0 + d * k / 12)]) for k in range(13)
+            ]
+        else:
+            pts.append(v.astype(np.float64))
+        if part.rough_edge and part.rough_edge["corner"] == i:  # jagged stretch on the edge to the next corner
+            edge = nxt - v
+            length = float(np.linalg.norm(edge))
+            normal = np.array([-edge[1], edge[0]]) / length
+            for s in np.arange(0.3 * length, 0.7 * length, 3.0):
+                pts.append(v + edge * s / length + normal * rng.uniform(-1, 1) * part.rough_edge["amp"])
+    return np.array(pts, np.float64)
+
+
+def _draw_hole(
+    img: np.ndarray, h: dict[str, Any], cx: float, cy: float, value: float, thickness: int = cv2.FILLED
+) -> None:
     if h["shape"] == "circle":
         cv2.circle(
             img,
@@ -178,16 +263,20 @@ def _draw_hole(img, h, cx, cy, value, thickness=cv2.FILLED):
             cv2.polylines(img, [pts], True, value, thickness, cv2.LINE_AA, shift=3)
 
 
-def render_layers(part: PartInstance, lighting: str, scale: float = 1.0):
+Layers = tuple[np.ndarray, np.ndarray, tuple[float, float]]  # colour layer, alpha, centre
+
+
+def render_layers(part: PartInstance, lighting: str, scale: float = 1.0) -> Layers:
     """Renders the part in local coordinates → (colour layer, alpha, centre)."""
-    poly = part.outline
     pad = 50
-    ext = np.abs(poly).max(0)
+    ext = np.abs(part.outline).max(0)
     W, H = int(2 * ext[0] + 2 * pad), int(2 * ext[1] + 2 * pad)
     cx, cy = W / 2, H / 2
     rng = np.random.default_rng(part.texture_seed)
+    plain = not (any(part.corner_radii) or part.rough_edge)
+    poly = part.outline if plain else edge_polygon(part, np.random.default_rng(part.texture_seed + 1))
 
-    alpha = np.zeros((H, W), np.float32)
+    alpha: np.ndarray = np.zeros((H, W), np.float32)
     pts = poly + np.array([cx, cy])  # shift the polygon (NumPy vector addition)
     cv2.fillPoly(alpha, [(pts * 8).round().astype(np.int32)], 1.0, cv2.LINE_AA, shift=3)
     if part.corner_cut:
@@ -203,14 +292,27 @@ def render_layers(part: PartInstance, lighting: str, scale: float = 1.0):
 
     if lighting == "front":
         base = np.array([182, 178, 172], np.float32)  # BGR, slightly bluish metal
-        streaks = rng.normal(0, 7, (H, 1)).astype(np.float32)
+        streaks: np.ndarray = rng.normal(0, 7, (H, 1)).astype(np.float32)
         streaks = cv2.GaussianBlur(np.repeat(streaks, W, axis=1), (1, 3), 0)
         grad = np.linspace(-10, 10, W, dtype=np.float32)[None, :]
         tex = streaks + grad + rng.normal(0, 3, (H, W)).astype(np.float32)
     else:
         base = np.array([58, 56, 54], np.float32)
         tex = rng.normal(0, 3, (H, W)).astype(np.float32)
-    layer = base[None, None, :] + tex[:, :, None]
+    layer: np.ndarray = base[None, None, :] + tex[:, :, None]
+
+    m: np.ndarray
+    if part.chamfer or part.chamfer_defect:  # deburred band along the outer edge: reflects the light differently
+        solid = np.zeros((H, W), np.float32)
+        cv2.fillPoly(solid, [(pts * 8).round().astype(np.int32)], 1.0, cv2.LINE_AA, shift=3)
+        depth = cv2.distanceTransform((solid > 0.5).astype(np.uint8), cv2.DIST_L2, 5)
+        width = np.full((H, W), part.chamfer, np.float32)
+        if part.chamfer_defect:
+            cd = part.chamfer_defect
+            yy, xx = np.mgrid[0:H, 0:W]
+            width[np.hypot(xx - cx - cd["x"], yy - cy - cd["y"]) < cd["radius"]] = cd["width"]
+        band = np.clip(width - depth + 0.5, 0, 1) * (solid > 0.5)
+        layer = layer + (30 if lighting == "front" else 8) * band[:, :, None]
 
     for h in part.blind_holes:
         m = np.zeros((H, W), np.float32)
@@ -249,6 +351,7 @@ def render_layers(part: PartInstance, lighting: str, scale: float = 1.0):
 
 
 def belt_background(size: tuple[int, int], lighting: str, rng: np.random.Generator) -> np.ndarray:
+    """Belt or backlight background with slight noise."""
     w, h = size
     if lighting == "front":
         base = np.array([44, 46, 48], np.float32)
@@ -256,7 +359,8 @@ def belt_background(size: tuple[int, int], lighting: str, rng: np.random.Generat
     else:
         base = np.array([236, 236, 234], np.float32)
         noise = rng.normal(0, 2, (h, w)).astype(np.float32)
-    return np.clip(base[None, None, :] + noise[:, :, None], 0, 255)
+    out: np.ndarray = np.clip(base[None, None, :] + noise[:, :, None], 0, 255)
+    return out
 
 
 def compose(
@@ -265,10 +369,14 @@ def compose(
     lighting: str = "front",
     frame_size: tuple[int, int] = (640, 480),
     rng: np.random.Generator | None = None,
-    layers=None,
+    layers: Layers | None = None,
     background: np.ndarray | None = None,
+    noise: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Places the part (pose: cx, cy, angle in degrees) on the belt and simulates camera effects."""
+    """Places the part (pose: cx, cy, angle in degrees) on the belt and simulates camera effects.
+
+    ``noise``: pre-generated sensor noise (σ = 2.5) – the simulator reuses a few frames of it, because
+    drawing new random numbers is the slowest step of a frame."""
     rng = rng or np.random.default_rng()
     w, h = frame_size
     scale = w / 640.0
@@ -284,14 +392,17 @@ def compose(
         frame = frame * (1 - aw) + lw * aw
 
     gain = rng.uniform(0.95, 1.05)  # small lighting fluctuation
-    frame = frame * gain + rng.normal(0, 2.5, frame.shape).astype(np.float32)
+    if noise is None:
+        noise = rng.normal(0, 2.5, frame.shape).astype(np.float32)
+    frame = frame * gain + noise
     frame = cv2.GaussianBlur(np.clip(frame, 0, 255), (0, 0), 0.6)
-    return frame.astype(np.uint8)
+    out: np.ndarray = frame.astype(np.uint8)
+    return out
 
 
 def random_pose(
     rng: np.random.Generator, allow_flip: bool = True, jitter: float = 30, max_angle: float = 8, any_angle: bool = False
-):
+) -> tuple[float, float, float]:
     """Random position/rotation on the belt. ``any_angle`` = parts arrive in any rotation (0–360°)."""
     if any_angle:
         ang = rng.uniform(0, 360)
@@ -301,11 +412,16 @@ def random_pose(
 
 
 def generate_dataset(
-    out_dir, part_type="A", lighting="front", n_train=15, n_test_good=20, n_per_defect=5, seed=0, any_angle=False
-):
+    out_dir: str | Path,
+    part_type: str = "A",
+    lighting: str = "front",
+    n_train: int = 15,
+    n_test_good: int = 20,
+    n_per_defect: int = 5,
+    seed: int = 0,
+    any_angle: bool = False,
+) -> Path:
     """Writes train/ (good parts only) and test/ok, test/nok/<defect> as PNG."""
-    from pathlib import Path
-
     rng = np.random.default_rng(seed)
     out = Path(out_dir)
     (out / "train").mkdir(parents=True, exist_ok=True)

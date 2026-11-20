@@ -4,7 +4,9 @@ Steps per image:
 1. Grayscale + Otsu threshold → separate the part from the conveyor
    (automatic polarity: front light = bright part on a dark belt,
    backlight = dark part in front of a bright background).
-2. Largest outer contour = part; ``minAreaRect`` gives position and angle.
+2. Largest outer contour that lies completely inside the image = part – rails, belt edges
+   and other structures that run out of the image are ignored; ``minAreaRect`` gives
+   position and angle.
 3. Coarse affine transform: long side of the bounding rectangle horizontal,
    part centroid in the centre of a fixed canvas.
 4. Rotation search: the part is compared with the reference at all angles
@@ -22,7 +24,9 @@ can later be projected back exactly into the original image.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any, TypeVar, cast
 
 import cv2
 import numpy as np
@@ -32,8 +36,10 @@ from .config import LocalizationConfig
 
 @dataclass
 class PartDetection:
+    """Result of ``detect_part``: outline, masks and position of the part in the image."""
+
     contour: np.ndarray
-    rect: tuple  # cv2.minAreaRect
+    rect: tuple[Any, ...]  # cv2.minAreaRect
     filled_mask: np.ndarray  # outer contour filled (including holes)
     part_mask: np.ndarray  # actual material (without holes)
     polarity: str  # "bright" | "dark" (part relative to background)
@@ -44,6 +50,8 @@ class PartDetection:
 
 @dataclass
 class AlignedPart:
+    """The part brought into the normalised pose of its model (canvas coordinates), ready for the inspection methods."""
+
     frame: np.ndarray  # working image (BGR), basis for the visualisation
     bgr: np.ndarray  # aligned part (BGR)
     gray: np.ndarray  # aligned, uint8
@@ -51,17 +59,19 @@ class AlignedPart:
     filled_mask: np.ndarray  # aligned, uint8 0/255
     part_mask: np.ndarray  # aligned, uint8 0/255
     to_orig: np.ndarray  # 3×3: canvas coordinates → working image coordinates
-    rect: tuple
+    rect: tuple[Any, ...]
     polarity: str
     part_level: float
     bg_level: float
 
 
 def to_gray(img: np.ndarray) -> np.ndarray:
+    """Grayscale copy of a BGR image (a gray image is returned unchanged)."""
     return img if img.ndim == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
 
 def resize_to_width(img: np.ndarray, width: int) -> np.ndarray:
+    """Image scaled to ``width`` pixels, keeping the aspect ratio."""
     h, w = img.shape[:2]
     if w == width:
         return img
@@ -70,35 +80,81 @@ def resize_to_width(img: np.ndarray, width: int) -> np.ndarray:
     return cv2.resize(img, (width, int(round(h * scale))), interpolation=interp)
 
 
+def _foreground(blur: np.ndarray, t: float, polarity: str) -> tuple[np.ndarray, list[np.ndarray]]:
+    """Binary image of the part's polarity and its outer contours."""
+    binary: np.ndarray = ((blur > t) if polarity == "bright" else (blur <= t)).astype(np.uint8) * 255
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    return binary, list(contours)
+
+
+def _inside(contour: np.ndarray, shape: tuple[int, ...], m: int) -> bool:
+    x, y, bw, bh = cv2.boundingRect(contour)
+    return bool(x > m and y > m and x + bw < shape[1] - m and y + bh < shape[0] - m)
+
+
+def _contrast(blur: np.ndarray, contour: np.ndarray) -> float:
+    """Brightness difference between an object and a ring around it."""
+    x, y, w, h = cv2.boundingRect(contour)
+    p = 8  # ring width
+    x0, y0 = max(0, x - p), max(0, y - p)
+    roi = blur[y0 : y + h + p, x0 : x + w + p]
+    inner = np.zeros(roi.shape, np.uint8)
+    cv2.drawContours(inner, [contour - (x0, y0)], -1, 255, cv2.FILLED)
+    ring = cv2.subtract(cv2.dilate(inner, np.ones((2 * p + 1, 2 * p + 1), np.uint8)), inner)
+    if not ring.any():
+        return 0.0
+    return abs(float(roi[inner > 0].mean()) - float(roi[ring > 0].mean()))
+
+
+def _parts_inside(
+    blur: np.ndarray, contours: list[np.ndarray], m: int, min_area: float, min_contrast: float
+) -> list[np.ndarray]:
+    """Objects that can be a part: completely inside the image, large enough, clearly set off."""
+    return [
+        c
+        for c in contours
+        if cv2.contourArea(c) >= min_area and _inside(c, blur.shape, m) and _contrast(blur, c) >= min_contrast
+    ]
+
+
 def detect_part(gray: np.ndarray, cfg: LocalizationConfig) -> PartDetection | None:
-    """Finds the largest part in the image (or ``None``)."""
+    """Finds the part: the largest object that lies completely inside the image, otherwise the
+    largest object (part entering or leaving the image → ``complete`` is False). Or ``None``."""
     blur = cv2.GaussianBlur(gray, (5, 5), 0)
     t, _ = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    m, min_area = cfg.border_margin_px, cfg.min_part_area_ratio * gray.shape[0] * gray.shape[1]
 
-    polarity = cfg.polarity
-    if polarity == "auto":
-        h, w = gray.shape
-        b = max(2, int(0.04 * min(h, w)))
-        border = np.concatenate([blur[:b].ravel(), blur[-b:].ravel(), blur[:, :b].ravel(), blur[:, -b:].ravel()])
-        polarity = "dark" if np.median(border) > t else "bright"
-
-    foreground = blur > t if polarity == "bright" else blur <= t
-    binary = foreground.astype(np.uint8) * 255
-
-    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, k)
-    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if cfg.polarity == "auto":
+        # The polarity in which a large object lies completely inside the image is the part's.
+        # Bright rails or a dark belt that run out of the image do not count (they made the
+        # border rule below take the belt for the part). Otherwise – part entering or leaving –
+        # the background is what touches the image border.
+        candidates = {p: _foreground(blur, t, p) for p in ("bright", "dark")}
+        found = {p: _parts_inside(blur, c[1], m, min_area, cfg.min_part_contrast) for p, c in candidates.items()}
+        size = {p: max((cv2.contourArea(c) for c in found[p]), default=0.0) for p in found}
+        polarity = max(size, key=lambda p: size[p])
+        if not found[polarity]:
+            h, w = gray.shape
+            b = max(2, int(0.04 * min(h, w)))
+            border = np.concatenate([blur[:b].ravel(), blur[-b:].ravel(), blur[:, :b].ravel(), blur[:, -b:].ravel()])
+            polarity = "dark" if np.median(border) > t else "bright"
+        binary, contours = candidates[polarity]
+        parts = found[polarity]
+    else:
+        polarity = cfg.polarity
+        binary, contours = _foreground(blur, t, polarity)
+        parts = _parts_inside(blur, contours, m, min_area, cfg.min_part_contrast)
     if not contours:
         return None
-    contour = max(contours, key=cv2.contourArea)
+    contour = max(parts or contours, key=cv2.contourArea)
     area = cv2.contourArea(contour)
     area_ratio = area / float(gray.shape[0] * gray.shape[1])
     if area_ratio < cfg.min_part_area_ratio:
         return None
 
     x, y, bw, bh = cv2.boundingRect(contour)
-    m = cfg.border_margin_px
-    complete = x > m and y > m and x + bw < gray.shape[1] - m and y + bh < gray.shape[0] - m
+    complete = _inside(contour, gray.shape, m)
 
     filled = np.zeros_like(gray)
     cv2.drawContours(filled, [contour], -1, 255, thickness=cv2.FILLED)
@@ -119,7 +175,7 @@ def detect_part(gray: np.ndarray, cfg: LocalizationConfig) -> PartDetection | No
     )
 
 
-def _coarse_angle(rect: tuple) -> float:
+def _coarse_angle(rect: tuple[Any, ...]) -> float:
     box = cv2.boxPoints(rect)
     e1, e2 = box[1] - box[0], box[2] - box[1]
     long_edge = e1 if np.linalg.norm(e1) >= np.linalg.norm(e2) else e2
@@ -165,7 +221,13 @@ def _canvas_rotation(canvas: tuple[int, int], angle: float, mirror: bool = False
     return r
 
 
-def _warp(img: np.ndarray, to_canvas: np.ndarray, canvas: tuple[int, int], nearest=False, border_value=0):
+def _warp(
+    img: np.ndarray,
+    to_canvas: np.ndarray,
+    canvas: tuple[int, int],
+    nearest: bool = False,
+    border_value: float | tuple[int, ...] = 0,
+) -> np.ndarray:
     interp = cv2.INTER_NEAREST if nearest else cv2.INTER_LINEAR
     return cv2.warpAffine(
         img,
@@ -181,7 +243,8 @@ def _normalize(gray: np.ndarray, bg: float, part: float) -> np.ndarray:
     denom = part - bg
     if abs(denom) < 1e-3:
         denom = 1e-3 if denom >= 0 else -1e-3
-    return np.clip((gray.astype(np.float32) - bg) / denom, -0.5, 1.5).astype(np.float32)
+    out: np.ndarray = np.clip((gray.astype(np.float32) - bg) / denom, -0.5, 1.5).astype(np.float32)
+    return out
 
 
 def _masked_median(gray: np.ndarray, mask: np.ndarray) -> float | None:
@@ -201,6 +264,7 @@ def _masked_median(gray: np.ndarray, mask: np.ndarray) -> float | None:
 
 
 def levels(gray: np.ndarray, det: PartDetection) -> tuple[float, float]:
+    """(part, background) brightness – medians inside the part and outside it, for the photometric normalisation."""
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
     inner = cv2.erode(det.part_mask, k)
     outer = cv2.dilate(det.filled_mask, k, iterations=2)
@@ -213,11 +277,22 @@ def levels(gray: np.ndarray, det: PartDetection) -> tuple[float, float]:
     return part_level, bg_level
 
 
-def _render_norm(gray, to_canvas, canvas, part_level, bg_level) -> np.ndarray:
+def _render_norm(
+    gray: np.ndarray, to_canvas: np.ndarray, canvas: tuple[int, int], part_level: float, bg_level: float
+) -> np.ndarray:
     return _normalize(_warp(gray, to_canvas, canvas, border_value=int(bg_level)), bg_level, part_level)
 
 
-def render(frame, gray, det, to_canvas, canvas, part_level, bg_level) -> AlignedPart:
+def render(
+    frame: np.ndarray,
+    gray: np.ndarray,
+    det: PartDetection,
+    to_canvas: np.ndarray,
+    canvas: tuple[int, int],
+    part_level: float,
+    bg_level: float,
+) -> AlignedPart:
+    """Warps the part onto the canvas and normalises it (background 0, part 1) → ``AlignedPart``."""
     gray_c = _warp(gray, to_canvas, canvas, border_value=int(bg_level))
     bgr_c = _warp(frame, to_canvas, canvas, border_value=(int(bg_level),) * 3)
     filled_c = _warp(det.filled_mask, to_canvas, canvas, nearest=True)
@@ -249,6 +324,7 @@ def _search_patch(norm: np.ndarray, size: int = 96) -> np.ndarray:
 
 
 def ncc(a: np.ndarray, b: np.ndarray) -> float:
+    """Normalised cross-correlation of two images of the same size (1 = identical up to brightness and contrast)."""
     a = a.ravel() - a.mean()
     b = b.ravel() - b.mean()
     return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9))
@@ -269,17 +345,18 @@ def _rotate_canvas_image(img: np.ndarray, angle: float, mirror: bool) -> np.ndar
     return cv2.warpAffine(img, _canvas_rotation((w, h), angle, mirror)[:2], (w, h), flags=cv2.INTER_LINEAR)
 
 
-_REF_CACHE: dict[tuple, tuple[np.ndarray, object]] = {}
+_REF_CACHE: dict[tuple[int, str], tuple[np.ndarray, object]] = {}
+_T = TypeVar("_T")
 
 
-def _ref_cached(reference: np.ndarray, key: str, build):
+def _ref_cached(reference: np.ndarray, key: str, build: Callable[[], _T]) -> _T:
     """Per-reference precomputation (the reference image is fixed per model): computed once,
     reused for every inspected part. Keyed by object identity; the array itself is kept in
     the entry so its id cannot be reused while cached."""
     k = (id(reference), key)
     hit = _REF_CACHE.get(k)
     if hit is not None and hit[0] is reference:
-        return hit[1]
+        return cast(_T, hit[1])
     if len(_REF_CACHE) > 32:
         _REF_CACHE.clear()
     val = build()
@@ -287,7 +364,7 @@ def _ref_cached(reference: np.ndarray, key: str, build):
     return val
 
 
-def _rotation_bank(reference_norm: np.ndarray, patch: int = 72):
+def _rotation_bank(reference_norm: np.ndarray, patch: int = 72) -> tuple[tuple[int, ...], np.ndarray]:
     """The small reference patch rotated by −0…−359° (1° steps), each row zero-mean and unit-length.
 
     ncc(rotate(img, a), ref) == ncc(img, rotate(ref, −a)) – the content fits into the square patch
@@ -324,7 +401,7 @@ def find_rotation(
     if img.shape != shape:
         img = cv2.resize(img, shape[::-1], interpolation=cv2.INTER_AREA)
 
-    def unit(v):
+    def unit(v: np.ndarray) -> np.ndarray:
         v = v.ravel().astype(np.float32)
         v = v - v.mean()
         return v / (float(np.linalg.norm(v)) + 1e-9)
@@ -333,6 +410,7 @@ def find_rotation(
     candidates = []
     for mirror in (False, True) if allow_mirror else (False,):
         scores = bank @ unit(cv2.flip(img, 1) if mirror else img)  # score per angle 0…359
+        idx: np.ndarray | list[int]
         if mode == "full":
             ext = np.concatenate([scores[-w:], scores, scores[:w]])
             win = np.lib.stride_tricks.sliding_window_view(ext, 2 * w + 1).max(axis=1)
@@ -410,17 +488,28 @@ def _use_outline_datum(cfg: LocalizationConfig, reference_norm: np.ndarray) -> b
         return False
     c = max(contours, key=cv2.contourArea)
     circularity = 4 * math.pi * cv2.contourArea(c) / max(1.0, cv2.arcLength(c, True) ** 2)
-    return circularity < 0.9
+    return bool(circularity < 0.9)
 
 
-def _ecc_refine(frame, gray, det, norm, to_canvas, canvas, ref, part_level, bg_level, outline_datum=False):
+def _ecc_refine(
+    frame: np.ndarray,
+    gray: np.ndarray,
+    det: PartDetection,
+    norm: np.ndarray,
+    to_canvas: np.ndarray,
+    canvas: tuple[int, int],
+    ref: np.ndarray,
+    part_level: float,
+    bg_level: float,
+    outline_datum: bool = False,
+) -> AlignedPart | None:
     # Registration on the smoothed shape only. Surface texture such as brushed metal
     # rotates with the part and would otherwise bias the result.
     # outline_datum=True: only the filled outer contour is used (like datum edges on a
     # drawing), so a displaced hole cannot pull the alignment and hide its own offset.
     # The grey values at the edge are kept (sub-pixel information); only the interior,
     # at least 2 px away from any edge, is flattened to 1 to remove texture.
-    def shape(img):
+    def shape(img: np.ndarray) -> np.ndarray:
         img = np.clip(img, 0, 1).astype(np.float32)
         binary = (img > 0.5).astype(np.uint8)
         if outline_datum:
@@ -444,7 +533,9 @@ def _ecc_refine(frame, gray, det, norm, to_canvas, canvas, ref, part_level, bg_l
     img = shape(norm)
     warp = np.eye(2, 3, dtype=np.float32)
     try:
-        _, warp = cv2.findTransformECC(
+        # Any: the OpenCV 5 type stubs allow no mask (None) only without gaussFiltSize
+        ecc: Any = cv2.findTransformECC
+        _, warp = ecc(
             tmpl_half,
             half(img),
             warp,

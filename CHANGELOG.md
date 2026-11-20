@@ -1,5 +1,181 @@
 # Changelog
 
+## 2.5.1 – everything in English (2026-11-20)
+
+- LCD texts are English by default: `Part <n>` / `OK` / `NOT OK` / `No part` / `Ready` / `Stopped` (still
+  configurable in the `lcd` section of config.json).
+- The installation guide is now English and up to date (`docs/INSTALL.md`, replaces `docs/INSTALL.de.md`): git
+  clone, Raspberry Pi 5 + USB camera, LCD display, capture modes, updating with `git pull`.
+
+## 2.5.0 – LCD piece counter (2026-11-20)
+
+- Fix: the backlight of display version 5 (address 0x30) stayed dark or blinked. Its chip has other registers than
+  the older PCA9633 (0x62): colour in 0x06/0x07/0x08, LED mode in 0x04 (written with the red value before, which
+  switched the LEDs off or to blinking). Both versions are now driven as in Seeed's library.
+- **Grove-LCD RGB Backlight** (16 × 2, I²C) next to the conveyor (`qc/lcd.py`, section `lcd` in config.json):
+  line 1 `Teil <n>` = running number of the inspected part (OK + NOK since the last counter reset), line 2 `OK` /
+  `NOT OK` / `Kein Teil`; backlight green / red / amber, blue while ready. Written by its own thread – the
+  inspection never waits for the display; a missing display is reported once and ignored. Texts and I²C addresses
+  are configurable (`rgb_address` 0x30 for display version 5, 0x62 for older ones). Counter reset and "batch
+  finished" start again at 0. Enabled in the preset `config.pi5_usb_c310.json`.
+- The display is **reset** (text controller initialised like after power-on, text cleared, backlight chip reset)
+  every time `qc web` starts – nothing another program left on it remains; when `qc web` ends it is cleared and
+  switched dark. `qc lcd-test` also leaves it cleared and dark.
+- `qc lcd-test`: runs through every state of the display (blue ready, green OK, blue again, red NOT OK, amber no
+  part, blue stopped) to check the wiring and the colours.
+- Backlight blue whenever nothing happens: inspection stopped (`Gestoppt`), waiting for a part, or no new part
+  for `lcd.result_seconds` (default 5 s) after an OK (green) / NOT OK (red) – then line 2 shows `Bereit` again.
+
+## 2.4.1 – manual check (2026-11-16)
+
+- **Capture mode `manual`** (`trigger.mode`, setup area → "Take the picture"): no belt – lay a part under the camera
+  and press *Capture* (operator screen, or the space bar). Nothing is captured automatically. The 3 images of the
+  resting part are averaged, then the part is inspected as usual; teach-in works the same way, one capture per
+  good part.
+
+## 2.4.0 – edge inspection, free working resolution, averaging at standstill (2026-11-16)
+
+- **New method `edge`** (`qc/methods/edge.py`, enabled by default) for milled and deburred parts: a brightness
+  profile across the edge every 2 px along the nominal contour (outline and cut-outs) gives
+  - the sub-pixel **edge position** → wrong corner radius, burr, nick (`Edge contour / radius deviates`),
+  - the **roughness** of the edge → unclean milled edge (`Edge not clean`),
+  - the **band behind the edge** relative to the surface → deburred too deep or not at all
+    (`Chamfer / deburring deviates`).
+  Tolerances per contour point from the good parts, bounded by leave-one-out; deviations accepted by the operator
+  are tolerated locally. 2 ms per part. Models taught before keep their methods – teach in again to use it.
+  Simulated parts (640 px, 0 false alarms in 900 good parts): radius ±5 px of 14 px 100 %, rough edge 100 %,
+  chamfer 4–6 px too wide 82–100 % (weakest along brush marks). Without `edge`: chamfer 0 %, rough edge ~45 %.
+- **Working resolution is free**: all pixel settings of the methods scale with `localization.work_width`
+  (identical results at 640 px). Preset `config.pi5_usb_c310.json` now works at **960 × 720**.
+- **Trigger mode `still`**: the 3 shots of the resting part are averaged into one image with less noise (teach-in
+  and inspection, `inspection.average_still`); a part that did not stop is voted on as before.
+- Simulator: part type `E` (rounded corners, chamfer) and the edge defects `radius`, `rough_edge`, `chamfer`.
+- Setup page shows the sensitivity sliders of the methods a model really has.
+
+## 2.3.1 – fine-tuning for the Pi 5 + C310 (2026-11-16)
+
+- **Flicker-free exposure** (`autosetup.flicker_free_hz`, `autosetup.min_gain`): lamps on 50 Hz mains flicker at
+  100 Hz; the automatic camera setup now chooses an exposure that is a whole multiple of 10 ms, so all shots of a
+  part get the same light. The gain makes up the difference, for USB cameras also below the default gain.
+- Trigger mode `still`: the automatic setup no longer shortens the exposure for the belt speed – the part is
+  captured at standstill.
+- Every log line appeared twice in the terminal (a library configured the root logger) – fixed.
+- Preset `config.pi5_usb_c310.json`: exposure 10 ms (max 20 ms), flicker-free 50 Hz, `still_frames` 4,
+  preview 15 fps. Benchmark on the Pi 5: 30 ms per inspection at 640 × 480.
+
+## 2.3.0 – Raspberry Pi 5 + USB camera (Logitech C310) (2026-11-11)
+
+- **USB camera source** `qc/usb_camera.py` (replaces the minimal OpenCV source):
+  - records in `camera.usb_capture` (C310: full 1280 × 960, `usb_format` MJPG) and scales every frame to the working
+    size `width × height`; the margin is used for the **digital zoom** of the automatic camera setup (software crop);
+  - a grabber thread keeps only the **newest** frame – USB cameras queue frames, the inspection never gets an old one;
+  - exposure (100 µs units), gain, fixed white balance (`usb_white_balance_k`), mains frequency (`power_line_hz`,
+    the C310 ships at 60 Hz) and the automatic frame-rate reduction are set with `v4l2-ctl` under the names the camera
+    reports (also the older kernel names); without v4l-utils the camera runs with OpenCV's basic settings;
+  - libjpeg's per-frame warning "Corrupt JPEG data: N extraneous bytes before marker" (the C310 pads its MJPG
+    frames; the image is fine) is filtered from stderr and counted – it flooded the terminal;
+  - the **automatic camera setup** now also works with a USB camera (exposure, gain, zoom);
+  - `usb:<video file or URL>` is read through the same source (real-time playback, no controls).
+- `config.pi5_usb_c310.json`: preset for the Pi 5 + C310 (stop-and-go capture mode, detect width 320, zoom ≤ 2×).
+- `deploy/install.sh --usb`: no picamera2, installs v4l-utils, checks the group video, lists the USB cameras, uses the
+  preset; the autostart takes the camera from config.json (was always `--camera pi`). `deploy/run.sh` passes its
+  arguments on.
+- `qc web`: a camera that cannot be opened gives a clear message with what to check (was a Python traceback).
+- Removed `build/` (a packaging leftover committed by mistake in 2.2.0) and added it to `.gitignore`.
+- 4 new tests against a stand-in for the C310 (control list as the camera reports it) and a recorded video file.
+  The inspection is unchanged (golden master identical).
+
+## 2.2.0 – code quality: refactoring, strict types, docstrings (2026-10-23)
+
+No change to the inspection: a golden master of 428 parts (4 synthetic scenarios incl. any rotation and backlight,
+both stop-and-go videos, save/load and a model update with release check) gives identical results – status,
+defects and every method score – before and after every step.
+
+- **Double work removed:** the outline check and the image comparison found the regions of the same image twice
+  (`connectedComponentsWithStats` for the defects and again for the largest region) – now one pass. Measured gain is
+  small (≈ 1.5 % per image, 14.9 → 14.7 ms on a PC, single thread): these were the cheap calls; most of the time
+  stays in the alignment (≈ 64 %), which was already optimised – `rotation_search: "flip"` is the big lever there.
+- **Structure:** `qc/methods.py` (810 lines) → package `qc/methods/` (`base`, `geometry`, `diff`, `pca`), public
+  names unchanged. `qc/model_store.py` (`ModelStore`): finding, loading, listing, saving and deleting models – one
+  place for "Model not found" instead of five copies. `system.py`: `_require_idle()` instead of six copies of the
+  idle check, the operator notices as a table of conditions, trigger polling split into belt and image folder.
+- **Dead code removed:** `SimulatorSource.MM_PER_PX`, `MODES`, an unused argument of `_rim_edge`.
+- **Types:** `mypy --strict` was at 300 findings (133 functions without annotations, 73 generic types without
+  element types) – now 0, and `strict = true` in `pyproject.toml`, so CI keeps it that way.
+- **Docstrings:** 213 added – every module, class and public function/method (PEP 257); ruff checks it (`D1`).
+- `body()` of the web API returns `{}` for a JSON body that is not an object (was an error 500).
+- README: standards table and project structure updated.
+
+## 2.1.7 – capture mode "still" for a stop-and-go belt (2026-10-21)
+
+- **`trigger.mode = "still"`**: the picture is taken only once the part has rested inside the centre band for
+  `trigger.still_frames` frames (default 3), never while it moves or brakes. Switch in the setup area (*Camera &
+  focus → Take the picture*), saved in config.json. A part that leaves the band without stopping is still captured
+  (in motion), counted, and the operator screen shows a notice. `pass` (default) is unchanged.
+- Reason: real test with a stop-and-go video filmed from a screen – in 98 of 200 good parts the first image was
+  NOK, because "pass" fires on the frame in which the part arrives (motion blur / screen ghost); the majority vote
+  corrected it. On that video "still" captures all 100 parts two frames after they come to rest.
+- Simulator: `camera.sim_stop_frames` (parts rest in the image centre). 3 new tests.
+
+## 2.1.6 – belt direction for a turned camera (2026-10-21)
+
+- Setup area → *Camera & focus* → **Belt direction in the camera image**: left ↔ right (trigger lines vertical) or
+  top ↕ bottom (camera turned by 90°, trigger lines horizontal). Takes effect immediately, is saved in the config file
+  the app was started with (`"trigger": {"axis": …}`, all other settings kept) and taken over by the active model's
+  camera profile. Only while idle; needs the setup PIN. The trigger itself already supported both directions
+  (`trigger.axis`), only the switch was missing. Test `test_belt_direction_can_be_switched_for_a_turned_camera`.
+- `AppConfig.persist()` writes one setting back into the config file; `QCModel.save_meta()`.
+
+## 2.1.5 – focus assistant ends with the setup area (2026-10-21)
+
+- The focus assistant kept running for up to 10 minutes after the setup area was left ("← Operator view · lock")
+  or its PIN session timed out. The operator screen has no button to switch it off, so its box stayed in the live
+  image instead of the normal trigger lines. It now switches off as soon as no device has the setup area open
+  (locked or timed out). Test `test_focus_assistant_ends_with_the_setup_area` (fails on 2.1.4).
+
+## 2.1.4 – part detection next to rails, UI theme (2026-10-20)
+
+- **Part detection ignores structures at the image border.** Bright guide rails along the belt (or any bright or dark
+  structure that runs out of the image) made the automatic polarity take the dark belt for the part: it touched the
+  image border, was never "complete", the trigger never fired (teach-in only with "Capture now") and a model taught
+  that way rated every part NOK. Now the polarity is the one in which a large object lies completely inside the
+  image, and the part is the largest such object; the old border rule remains the fallback for parts entering or
+  leaving the image. Such an object must also differ from its surroundings by at least
+  `localization.min_part_contrast` grey levels (default 25), so belt texture or noise on an empty belt never counts
+  as a part. Tested with a conveyor video (rails top and bottom): before 0 of 20 teach-in parts and 0 of 100
+  test parts captured, now 20/20 and 100/100 (also with `trigger.detect_width` 240 as on the Pi). New test
+  `test_rails_at_the_image_border_are_not_the_part`. The synthetic evaluation is unchanged (identical table).
+- **UI theme "measuring table"**: graphite machine bar with a safety-yellow edge, faint measuring grid, viewfinder
+  corners around the camera image, monospace for labels and numbers. OK/NOK as solid colour blocks with white text
+  (readable from a distance); NOK is also striped, so it differs from OK not only by colour. Light and dark scheme,
+  system fonts only (offline, CSP unchanged). Screenshots in `docs/` updated.
+
+## 2.1.3 – CI, faster tests, code clean-up (2026-10-14)
+
+No change to the inspection: the synthetic evaluation (`qc evaluate --synthetic`, 4 scenarios × 15 configurations)
+gives exactly the same table as 2.1.2.
+
+- **Continuous integration** (`.github/workflows/ci.yml`): `ruff format --check`, `ruff check`, `mypy` and
+  `pytest --cov` on Python 3.11 (Raspberry Pi OS Bookworm) and 3.13 (Trixie) for every pull request and every push
+  to `main`.
+- **Tests 3.5× faster** (158 s → ~45 s on 4 cores): they run in parallel (`pytest-xdist`, one thread per worker –
+  NumPy/OpenCV threads on top of the workers made a parallel run slower than a serial one), and the simulator reuses
+  8 pre-generated sensor noise frames instead of drawing new random numbers for every frame (33 → 11 ms per frame;
+  this also lowers the CPU load of the simulator in the web UI). Training and test data (`synthetic.compose`) are
+  unchanged.
+- **Test coverage 91 % → 94 %** (77 tests): all image representations, `qc evaluate` with own photo folders and CSV
+  output, the Pi camera with focus motor (Camera Module 3) against the picamera2 stand-in, the camera sources from
+  the config, the operator endpoints (live image, PIN state, result images, feedback).
+- **`qc/improvement.py`**: the continuous-improvement logic (operator decisions, background update, release, undo,
+  accepted parts, notices) moved out of `QCSystem` into its own component `ModelImprovement`, like `CameraSetup`
+  (`system.py` 791 → 638 lines). The setup API calls `system.improve.…`.
+- **Type check with current libraries:** `mypy` reported 17 errors against the type information of NumPy 2.5 and
+  OpenCV 5 (earlier runs had not seen it). Fixed with annotations; `read_image()` gives a clear error for an
+  unreadable image in `qc evaluate` instead of failing later.
+- Test fix: `test_operator_acceptance_updates_the_model_during_inspection` failed about once in 10 runs – a part
+  that was already being inspected with version 1 when version 2 was released is correctly logged as version 1;
+  the test now waits for the first part of version 2.
+
 ## 2.1.2 – Raspberry Pi OS Trixie (2026-10-12)
 
 - `deploy/install.sh`: no fixed `numpy<2` any more. On Raspberry Pi OS Trixie (Debian 13, Python 3.13) `picamera2`
