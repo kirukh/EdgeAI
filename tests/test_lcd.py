@@ -67,6 +67,21 @@ def test_part_display_shows_counter_result_and_colour():
         disp.close()
 
 
+def test_result_turns_blue_when_nothing_happens():
+    bus = FakeBus()
+    disp = PartDisplay(LCDConfig(enabled=True, result_seconds=0.3), lambda *_: None, lambda c: GroveLCD(bus))
+    try:
+        disp.result(5, "OK")
+        wait(lambda: disp.shown == ("Teil 5", "OK", "OK"), 5)
+        assert bus.colour() == COLOURS["OK"]
+        wait(lambda: disp.shown == ("Teil 5", "Bereit", "idle"), 5)  # no new part → blue
+        assert bus.colour() == COLOURS["idle"] == (0, 0, 255)
+        disp.stopped(5)
+        wait(lambda: disp.shown == ("Teil 5", "Gestoppt", "idle"), 5)
+    finally:
+        disp.close()
+
+
 def test_missing_display_is_reported_once_and_does_not_stop_anything():
     messages: list[tuple[str, str]] = []
     disp = PartDisplay(
@@ -110,10 +125,11 @@ def test_inspection_counts_parts_on_the_display(make_system):
     wait(lambda: s.mode == "idle" and s.model is not None, 120)
     s.start_inspection()
     wait(lambda: s.part_count >= 3, 120)
-    s.stop_inspection()
-    last = s.results.history[0]
-    n = s.part_count
-    want = (f"Teil {n}", "OK" if last["status"] == "OK" else "NOT OK", last["status"])
-    wait(lambda: s.lcd.shown == want, 10)
+    with s.lock:  # no further result while checking
+        last = s.results.history[0]
+        want = (f"Teil {s.part_count}", "OK" if last["status"] == "OK" else "NOT OK", last["status"])
+        wait(lambda: s.lcd.shown == want, 10)
+        s.stop_inspection()
+    wait(lambda: s.lcd.shown == (f"Teil {s.part_count}", "Gestoppt", "idle"), 10)
     s.reset_counts()
     wait(lambda: s.lcd.shown == ("Teil 0", "Bereit", "idle"), 10)

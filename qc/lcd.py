@@ -5,6 +5,9 @@
     │OK              │   line 2: result of that part – backlight green (OK) or red (NOT OK)
     └────────────────┘
 
+Backlight: green = OK, red = NOT OK, blue = nothing happening (inspection stopped, waiting for the
+first part, or no new part for ``lcd.result_seconds`` – then line 2 shows "Bereit" again).
+
 The display sits on the Pi's I²C bus 1 (Grove pins SDA/SCL, 3.3 V or 5 V, GND). It has two
 chips: the text controller (address 0x3e) and the backlight (0x30 on version 5 of the display,
 0x62 on older versions). I²C is slow (a few ms per character), so the display is written by its
@@ -27,7 +30,7 @@ from .config import LCDConfig
 
 WIDTH = 16
 COLOURS = {  # backlight (R, G, B)
-    "idle": (40, 40, 120),
+    "idle": (0, 0, 255),
     "OK": (0, 160, 0),
     "NOK": (255, 0, 0),
     "NO_PART": (160, 110, 0),
@@ -129,6 +132,10 @@ class PartDisplay:
         """No result yet (start, counter reset): number of parts so far and "ready"."""
         self._show(self.cfg.line1.format(n=count), self.cfg.ready_text, "idle")
 
+    def stopped(self, count: int) -> None:
+        """Inspection stopped / nothing running: blue, line 2 "Gestoppt"."""
+        self._show(self.cfg.line1.format(n=count), self.cfg.stopped_text, "idle")
+
     def result(self, count: int, status: str) -> None:
         """Result of an inspected part: ``count`` = its running number, ``status`` OK / NOK / NO_PART."""
         text = {"OK": self.cfg.ok_text, "NOK": self.cfg.nok_text}.get(status, self.cfg.no_part_text)
@@ -154,7 +161,12 @@ class PartDisplay:
         lcd = None
         while True:
             with self._cv:
-                self._cv.wait_for(lambda: self._stop or self._want is not None)
+                shown = self.shown
+                # a result stays green/red for result_seconds; without a new part the display turns blue
+                hold = self.cfg.result_seconds if shown and shown[2] != "idle" and self.cfg.result_seconds > 0 else None
+                if not self._cv.wait_for(lambda: self._stop or self._want is not None, timeout=hold):
+                    assert shown is not None
+                    self._want = (shown[0], self.cfg.ready_text, "idle")
                 if self._stop:
                     return
                 want, self._want = self._want, None

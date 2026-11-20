@@ -520,6 +520,7 @@ class QCSystem:
                 raise ValueError("No model selected.")
             self._require_idle()
             self.mode = "inspecting"
+            self.lcd.ready(self.part_count)
         self.log("info", f"Inspection started with model “{self.model.name}”.")
 
     def stop_inspection(self) -> None:
@@ -529,6 +530,7 @@ class QCSystem:
             if self.mode == "inspecting":
                 self.mode = "idle"
                 self.log("info", "Inspection stopped.")
+                self.lcd.stopped(self.part_count)
 
     def _inspect(self, model: QCModel, shots: list[np.ndarray]) -> dict[str, Any]:
         """Inspects one part (outside the lock – the UI stays responsive) and records the result."""

@@ -9,6 +9,8 @@
   are configurable (`rgb_address` 0x30 for display version 5, 0x62 for older ones). Counter reset and "batch
   finished" start again at 0. Enabled in the preset `config.pi5_usb_c310.json`.
 - `qc lcd-test`: shows the three states on the display to check the wiring.
+- Backlight blue whenever nothing happens: inspection stopped (`Gestoppt`), waiting for a part, or no new part
+  for `lcd.result_seconds` (default 5 s) after an OK (green) / NOT OK (red) – then line 2 shows `Bereit` again.
 
 ## 2.4.1 – manual check (2026-11-16)
 

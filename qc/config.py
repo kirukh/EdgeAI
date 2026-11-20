@@ -272,6 +272,10 @@ class LCDConfig:
     nok_text: str = "NOT OK"
     no_part_text: str = "Kein Teil"
     ready_text: str = "Bereit"
+    stopped_text: str = "Gestoppt"
+    # OK (green) / NOT OK (red) stays this long; without a new part the display then turns blue
+    # ("Bereit"). 0 = the result stays until the next part.
+    result_seconds: float = 5.0
 
 
 @dataclass
