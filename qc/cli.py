@@ -80,6 +80,8 @@ def cmd_web(args: argparse.Namespace) -> None:
     from .web import create_app
 
     cfg = _cfg(args)
+    found = Path(args.config).exists()
+    print(f"Configuration: {Path(args.config).resolve()}" + ("" if found else "  (not found – default settings)"))
     if args.part_type:
         cfg.camera.sim_part_type = args.part_type
     if args.any_angle:

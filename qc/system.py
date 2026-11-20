@@ -109,6 +109,13 @@ class QCSystem:
         self.models = ModelStore(cfg.storage.models_dir)
         self.improve = ModelImprovement(cfg, self.models, self.lock, lambda: self.model, self._set_model, self.log)
         self.lcd = PartDisplay(cfg.lcd, self.log)  # piece counter + result on the LCD (if enabled)
+        lc = cfg.lcd
+        self.log(
+            "info",
+            f"LCD display: on (I2C bus {lc.bus}, text {lc.lcd_address}, backlight {lc.rgb_address})"
+            if lc.enabled
+            else f'LCD display: off – switch it on in {cfg.path or "config.json"}:  "lcd": {{"enabled": true}}',
+        )
         self.lcd.ready(self.part_count)
         for section in cfg.ignored:
             self.log("warn", f"config.json: section “{section}” belongs to the full version and is ignored.")

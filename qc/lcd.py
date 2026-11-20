@@ -190,6 +190,7 @@ class PartDisplay:
             try:
                 if lcd is None:
                     lcd = self._connect(self.cfg)
+                    self.log("info", "LCD display connected.")
                 line1, line2, state = want
                 lcd.write(line1, line2)
                 lcd.colour(COLOURS.get(state, COLOURS["idle"]))
