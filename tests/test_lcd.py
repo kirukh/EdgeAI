@@ -98,6 +98,21 @@ def test_result_turns_blue_when_nothing_happens():
         disp.close()
 
 
+def test_display_is_reset_at_start_and_dark_at_the_end():
+    """Whatever another program (e.g. lcd-test) left on the display is cleared when qc starts."""
+    bus = FakeBus()
+    disp = PartDisplay(LCDConfig(enabled=True), lambda *_: None, lambda c: GroveLCD(bus))
+    disp.ready(0)
+    wait(lambda: disp.shown == ("Teil 0", "Bereit", "idle"), 5)
+    first = bus.writes[:6]
+    assert [w for w in first if w[0] == 0x3E][:3] == [(0x3E, 0x80, 0x28)] * 3  # power-on initialisation
+    assert (0x3E, 0x80, 0x01) in bus.writes  # cleared
+    assert bus.writes.index((0x30, 0x00, 0x07)) < bus.writes.index((0x30, 0x04, 0x15))  # backlight reset, LEDs on
+    disp.close()
+    assert disp.shown == ("", "", "off") and bus.colour() == (0, 0, 0)
+    assert bus.writes[-4] == (0x3E, 0x80, 0x01)  # text cleared at the end
+
+
 def test_missing_display_is_reported_once_and_does_not_stop_anything():
     messages: list[tuple[str, str]] = []
     disp = PartDisplay(

@@ -11,6 +11,9 @@
   inspection never waits for the display; a missing display is reported once and ignored. Texts and I²C addresses
   are configurable (`rgb_address` 0x30 for display version 5, 0x62 for older ones). Counter reset and "batch
   finished" start again at 0. Enabled in the preset `config.pi5_usb_c310.json`.
+- The display is **reset** (text controller initialised like after power-on, text cleared, backlight chip reset)
+  every time `qc web` starts – nothing another program left on it remains; when `qc web` ends it is cleared and
+  switched dark. `qc lcd-test` also leaves it cleared and dark.
 - `qc lcd-test`: runs through every state of the display (blue ready, green OK, blue again, red NOT OK, amber no
   part, blue stopped) to check the wiring and the colours.
 - Backlight blue whenever nothing happens: inspection stopped (`Gestoppt`), waiting for a part, or no new part

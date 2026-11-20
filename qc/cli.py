@@ -290,6 +290,8 @@ def cmd_lcd_test(args: argparse.Namespace) -> int:
             lcd.colour(COLOURS[state])
             print(f"   {c.line1.format(n=n):<10} / {line2:<10}  {meaning}")
             time.sleep(2)
+        lcd.off()
+        print("   display cleared and dark – qc web resets it again when it starts")
     except (OSError, RuntimeError) as e:
         print(
             f"LCD not reachable: {e}\n   Check the cable (SDA/SCL), I2C switched on (sudo raspi-config → Interface "

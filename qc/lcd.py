@@ -80,12 +80,23 @@ class GroveLCD:
 
     def __init__(self, bus: Bus, lcd_addr: int = 0x3E, rgb_addr: int = 0x30):
         self.bus, self.lcd_addr, self.rgb_addr = bus, lcd_addr, rgb_addr
-        self._command(0x28)  # 2 lines, 5×8 dots
+        self.v5 = rgb_addr == RGB_V5
+        self.lines = ["", ""]
+        self.reset()
+
+    def reset(self) -> None:
+        """Full reset of text and backlight – whatever another program left on the display is gone.
+        The text controller is initialised like after power-on (function set three times)."""
+        time.sleep(0.05)
+        for wait in (0.0045, 0.00015, 0.00015):
+            self.bus.write_byte_data(self.lcd_addr, 0x80, 0x28)  # 2 lines, 5×8 dots
+            time.sleep(wait)
         self._command(0x0C)  # display on, cursor off
-        self._command(0x06)  # cursor moves to the right
         self._command(0x01)  # clear
         time.sleep(0.002)
-        self.v5 = rgb_addr == RGB_V5
+        self._command(0x06)  # cursor moves to the right
+        self.lines = ["", ""]
+        rgb_addr = self.rgb_addr
         if self.v5:
             self.bus.write_byte_data(rgb_addr, 0x00, 0x07)  # reset the backlight chip
             time.sleep(0.001)
@@ -94,7 +105,13 @@ class GroveLCD:
             self.bus.write_byte_data(rgb_addr, 0x00, 0x00)  # normal mode
             self.bus.write_byte_data(rgb_addr, 0x01, 0x00)
             self.bus.write_byte_data(rgb_addr, 0x08, 0xAA)  # all LEDs PWM-controlled
+
+    def off(self) -> None:
+        """Text cleared and backlight off (program ends)."""
+        self._command(0x01)
+        time.sleep(0.002)
         self.lines = ["", ""]
+        self.colour((0, 0, 0))
 
     def _command(self, cmd: int) -> None:
         self.bus.write_byte_data(self.lcd_addr, 0x80, cmd)
@@ -158,7 +175,11 @@ class PartDisplay:
         self._show(self.cfg.line1.format(n=count), text, status)
 
     def close(self) -> None:
-        """Stops the display thread."""
+        """Program ends: the display is cleared and switched dark, then the display thread stops."""
+        if self._thread is not None and self.error is None:
+            self._show("", "", "off")
+            with self._cv:
+                self._cv.wait_for(lambda: self.shown is not None and self.shown[2] == "off", timeout=2)
         with self._cv:
             self._stop = True
             self._cv.notify_all()
@@ -179,7 +200,11 @@ class PartDisplay:
             with self._cv:
                 shown = self.shown
                 # a result stays green/red for result_seconds; without a new part the display turns blue
-                hold = self.cfg.result_seconds if shown and shown[2] != "idle" and self.cfg.result_seconds > 0 else None
+                hold = (
+                    self.cfg.result_seconds
+                    if shown and shown[2] not in ("idle", "off") and self.cfg.result_seconds > 0
+                    else None
+                )
                 if not self._cv.wait_for(lambda: self._stop or self._want is not None, timeout=hold):
                     assert shown is not None
                     self._want = (shown[0], self.cfg.ready_text, "idle")
@@ -188,13 +213,18 @@ class PartDisplay:
                 want, self._want = self._want, None
             assert want is not None
             try:
-                if lcd is None:
+                if lcd is None:  # connecting resets the display (text and backlight)
                     lcd = self._connect(self.cfg)
-                    self.log("info", "LCD display connected.")
+                    self.log("info", "LCD display connected and reset.")
                 line1, line2, state = want
-                lcd.write(line1, line2)
-                lcd.colour(COLOURS.get(state, COLOURS["idle"]))
-                self.shown, self.error = want, None
+                if state == "off":
+                    lcd.off()
+                else:
+                    lcd.write(line1, line2)
+                    lcd.colour(COLOURS.get(state, COLOURS["idle"]))
+                with self._cv:
+                    self.shown, self.error = want, None
+                    self._cv.notify_all()
             except Exception as e:  # display unplugged, I²C off … – the inspection carries on
                 lcd = None
                 if self.error is None:
