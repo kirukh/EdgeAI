@@ -26,9 +26,11 @@ class FakeBus:
     def text(self) -> str:
         return "".join(chr(v) for a, r, v in self.writes if a == 0x3E and r == 0x40)
 
-    def colour(self) -> tuple[int, int, int]:
-        rgb = {r: v for a, r, v in self.writes if a == 0x30 and r in (2, 3, 4)}
-        return rgb[4], rgb[3], rgb[2]
+    def colour(self, addr: int = 0x30) -> tuple[int, int, int]:
+        """Last colour written – registers of display version 5 (0x30) or the older PCA9633 (0x62)."""
+        regs = (0x06, 0x07, 0x08) if addr == 0x30 else (0x04, 0x03, 0x02)
+        rgb = {r: v for a, r, v in self.writes if a == addr and r in regs}
+        return rgb[regs[0]], rgb[regs[1]], rgb[regs[2]]
 
 
 def test_lines_are_plain_ascii_and_16_characters():
@@ -41,7 +43,7 @@ def test_lines_are_plain_ascii_and_16_characters():
 def test_grove_lcd_writes_both_lines_and_only_what_changed():
     bus = FakeBus()
     lcd = GroveLCD(bus)
-    assert (0x30, 0x08, 0xAA) in bus.writes  # backlight chip set up
+    assert bus.writes[-2:] == [(0x30, 0x00, 0x07), (0x30, 0x04, 0x15)]  # v5: reset, all LEDs on
     lcd.write("Teil 1", "OK")
     lcd.colour((0, 160, 0))
     assert bus.text() == fit("Teil 1") + fit("OK") and bus.colour() == (0, 160, 0)
@@ -49,6 +51,20 @@ def test_grove_lcd_writes_both_lines_and_only_what_changed():
     bus.writes.clear()
     lcd.write("Teil 1", "NOT OK")  # line 1 unchanged → not sent again
     assert bus.text() == fit("NOT OK")
+
+
+def test_backlight_registers_of_both_display_versions():
+    """Version 5 (0x30) has the LED mode in register 0x04 – a colour value there switches the LEDs off or
+    makes them blink. The colour goes to 0x06–0x08 there, to 0x04/0x03/0x02 on older displays (0x62)."""
+    for addr, setup in ((0x30, (0x30, 0x04, 0x15)), (0x62, (0x62, 0x08, 0xAA))):
+        bus = FakeBus()
+        lcd = GroveLCD(bus, rgb_addr=addr)
+        assert setup in bus.writes
+        bus.writes.clear()
+        lcd.colour((0, 160, 0))
+        assert bus.colour(addr) == (0, 160, 0) and len(bus.writes) == 3
+        if addr == 0x30:
+            assert all(r != 0x04 for _, r, _ in bus.writes)  # the LED mode stays "on"
 
 
 def test_part_display_shows_counter_result_and_colour():

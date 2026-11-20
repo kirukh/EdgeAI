@@ -9,8 +9,13 @@ Backlight: green = OK, red = NOT OK, blue = nothing happening (inspection stoppe
 first part, or no new part for ``lcd.result_seconds`` – then line 2 shows "Bereit" again).
 
 The display sits on the Pi's I²C bus 1 (Grove pins SDA/SCL, 3.3 V or 5 V, GND). It has two
-chips: the text controller (address 0x3e) and the backlight (0x30 on version 5 of the display,
-0x62 on older versions). I²C is slow (a few ms per character), so the display is written by its
+chips: the text controller (address 0x3e) and the backlight. The backlight chip differs between
+the versions of the display, with different registers (as in Seeed's own library rgb_lcd.cpp):
+
+* version 5, address 0x30: reset 0x00 ← 0x07, all LEDs on 0x04 ← 0x15; red/green/blue = 0x06/0x07/0x08
+  (register 0x04 is the LED MODE there – writing a colour value into it makes the LEDs blink or go off)
+* older versions, address 0x62 (PCA9633): 0x00 ← 0, 0x01 ← 0, 0x08 ← 0xAA; red/green/blue = 0x04/0x03/0x02
+ I²C is slow (a few ms per character), so the display is written by its
 own thread – the inspection never waits for it. If the display is missing or the bus fails, a
 warning is logged once and the inspection carries on without it.
 
@@ -29,6 +34,7 @@ from typing import Any, Protocol
 from .config import LCDConfig
 
 WIDTH = 16
+RGB_V5 = 0x30  # backlight chip of display version 5 (older versions: 0x62)
 COLOURS = {  # backlight (R, G, B)
     "idle": (0, 0, 255),
     "OK": (0, 160, 0),
@@ -79,9 +85,15 @@ class GroveLCD:
         self._command(0x06)  # cursor moves to the right
         self._command(0x01)  # clear
         time.sleep(0.002)
-        self.bus.write_byte_data(rgb_addr, 0x00, 0x00)  # backlight chip: normal mode
-        self.bus.write_byte_data(rgb_addr, 0x01, 0x00)
-        self.bus.write_byte_data(rgb_addr, 0x08, 0xAA)  # all LEDs PWM-controlled
+        self.v5 = rgb_addr == RGB_V5
+        if self.v5:
+            self.bus.write_byte_data(rgb_addr, 0x00, 0x07)  # reset the backlight chip
+            time.sleep(0.001)
+            self.bus.write_byte_data(rgb_addr, 0x04, 0x15)  # all three LEDs on (brightness from 0x06–0x08)
+        else:  # PCA9633
+            self.bus.write_byte_data(rgb_addr, 0x00, 0x00)  # normal mode
+            self.bus.write_byte_data(rgb_addr, 0x01, 0x00)
+            self.bus.write_byte_data(rgb_addr, 0x08, 0xAA)  # all LEDs PWM-controlled
         self.lines = ["", ""]
 
     def _command(self, cmd: int) -> None:
@@ -91,6 +103,10 @@ class GroveLCD:
     def colour(self, rgb: tuple[int, int, int]) -> None:
         """Backlight colour (0–255 each)."""
         r, g, b = rgb
+        if self.v5:
+            for register, value in ((0x06, r), (0x07, g), (0x08, b)):
+                self.bus.write_byte_data(self.rgb_addr, register, value)
+            return
         self.bus.write_byte_data(self.rgb_addr, 0x04, r)
         self.bus.write_byte_data(self.rgb_addr, 0x03, g)
         self.bus.write_byte_data(self.rgb_addr, 0x02, b)

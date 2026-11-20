@@ -2,6 +2,9 @@
 
 ## 2.5.0 – LCD piece counter (2026-11-20)
 
+- Fix: the backlight of display version 5 (address 0x30) stayed dark or blinked. Its chip has other registers than
+  the older PCA9633 (0x62): colour in 0x06/0x07/0x08, LED mode in 0x04 (written with the red value before, which
+  switched the LEDs off or to blinking). Both versions are now driven as in Seeed's library.
 - **Grove-LCD RGB Backlight** (16 × 2, I²C) next to the conveyor (`qc/lcd.py`, section `lcd` in config.json):
   line 1 `Teil <n>` = running number of the inspected part (OK + NOK since the last counter reset), line 2 `OK` /
   `NOT OK` / `Kein Teil`; backlight green / red / amber, blue while ready. Written by its own thread – the
