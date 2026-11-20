@@ -267,17 +267,26 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
 
 
 def cmd_lcd_test(args: argparse.Namespace) -> int:
-    """Shows the three states on the LCD (settings from the lcd section of config.json, also if disabled)."""
+    """Runs through every state of the LCD with its colour (settings from the lcd section of config.json,
+    also if the display is disabled there)."""
     from .lcd import COLOURS, GroveLCD, address, open_bus
 
     c = AppConfig.load(args.config).lcd
     print(f"LCD at I2C bus {c.bus}, text {c.lcd_address}, backlight {c.rgb_address}")
     try:
         lcd = GroveLCD(open_bus(c.bus), address(c.lcd_address), address(c.rgb_address))
-        for line2, state in ((c.ready_text, "idle"), (c.ok_text, "OK"), (c.nok_text, "NOK")):
-            lcd.write(c.line1.format(n=1), line2)
+        steps = [  # (part number, line 2, colour, what it means)
+            (0, c.ready_text, "idle", "blue  – inspection started, waiting for the first part"),
+            (1, c.ok_text, "OK", "green – part OK"),
+            (1, c.ready_text, "idle", f"blue  – no new part for {c.result_seconds:g} s"),
+            (2, c.nok_text, "NOK", "red   – part NOT OK"),
+            (2, c.no_part_text, "NO_PART", "amber – no complete part in the picture"),
+            (2, c.stopped_text, "idle", "blue  – inspection stopped"),
+        ]
+        for n, line2, state, meaning in steps:
+            lcd.write(c.line1.format(n=n), line2)
             lcd.colour(COLOURS[state])
-            print(f"   shown: {c.line1.format(n=1)!r} / {line2!r}")
+            print(f"   {c.line1.format(n=n):<10} / {line2:<10}  {meaning}")
             time.sleep(2)
     except (OSError, RuntimeError) as e:
         print(
@@ -336,7 +345,7 @@ def main(argv: list[str] | None = None) -> int:
     method_args(b)
     b.set_defaults(func=cmd_benchmark)
 
-    lc = sub.add_parser("lcd-test", help="show a test text on the LCD display (Grove-LCD RGB Backlight)")
+    lc = sub.add_parser("lcd-test", help="run through all states of the LCD display (texts and colours)")
     lc.set_defaults(func=cmd_lcd_test)
 
     g = sub.add_parser("generate", help="generate a synthetic test dataset")
