@@ -391,6 +391,7 @@ qc/methods/                inspection methods with reference screening: base.py 
                            edge.py, diff.py, pca.py
 qc/model.py                part type: training (with screening), inspection, fusion decision, save/load
 qc/inspection.py           several images per part: majority vote, or averaging for a resting part
+qc/lcd.py                  Grove-LCD RGB Backlight: piece counter + result next to the conveyor
 qc/visualize.py            defect marking, heatmap
 qc/teach.py                teach-in session (reference images)
 qc/camera_setup.py         camera profiles, automatic camera setup, focus assistant

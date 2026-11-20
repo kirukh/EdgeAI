@@ -35,5 +35,10 @@
     "preview_fps": 15,
     "preview_quality": 75
   },
-  "target_reference_count": 15
+  "target_reference_count": 15,
+  "lcd": {
+    "enabled": true,
+    "lcd_address": "0x3e",
+    "rgb_address": "0x30"
+  }
 }

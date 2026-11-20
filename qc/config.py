@@ -260,6 +260,21 @@ class UIConfig:
 
 
 @dataclass
+class LCDConfig:
+    """Grove-LCD RGB Backlight (16 × 2, I²C): piece counter and result next to the conveyor (qc/lcd.py)."""
+
+    enabled: bool = False
+    bus: int = 1  # I²C bus of the Raspberry Pi (pins 3/5 = bus 1)
+    lcd_address: int | str = "0x3e"  # text controller
+    rgb_address: int | str = "0x30"  # backlight: 0x30 = display version 5, 0x62 = older versions
+    line1: str = "Teil {n}"  # {n} = running number of the inspected part
+    ok_text: str = "OK"
+    nok_text: str = "NOT OK"
+    no_part_text: str = "Kein Teil"
+    ready_text: str = "Bereit"
+
+
+@dataclass
 class AppConfig:
     """Complete configuration (``config.json``); unknown keys and invalid values are reported, not ignored."""
 
@@ -273,6 +288,7 @@ class AppConfig:
     learning: LearningConfig = field(default_factory=LearningConfig)
     ui: UIConfig = field(default_factory=UIConfig)
     autosetup: AutoSetupConfig = field(default_factory=AutoSetupConfig)
+    lcd: LCDConfig = field(default_factory=LCDConfig)
     target_reference_count: int = 15
     # Sections of older versions that were found in the file and ignored (logged at start-up)
     ignored: list[str] = field(default_factory=list, repr=False)
@@ -368,6 +384,14 @@ class AppConfig:
         at_least("target_reference_count", self.target_reference_count, 3)
         at_least("learning.update_after", self.learning.update_after, 0)
         at_least("autosetup.max_zoom", self.autosetup.max_zoom, 1.0)
+        for key in ("lcd_address", "rgb_address"):
+            try:
+                if not 0x03 <= int(str(getattr(self.lcd, key)), 0) <= 0x77:
+                    raise ValueError
+            except ValueError:
+                errors.append(f'lcd.{key} = {getattr(self.lcd, key)!r} – must be an I2C address such as "0x3e"')
+        if "{n}" not in self.lcd.line1:
+            errors.append(f"lcd.line1 = {self.lcd.line1!r} – must contain {{n}} (the part number)")
         one_of("autosetup.flicker_free_hz", self.autosetup.flicker_free_hz, (0, 50, 60))
         if not 0 < self.autosetup.min_gain <= self.autosetup.max_gain:
             errors.append(f"autosetup.min_gain = {self.autosetup.min_gain!r} – must be > 0 and ≤ autosetup.max_gain")

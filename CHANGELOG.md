@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.5.0 – LCD piece counter (2026-11-20)
+
+- **Grove-LCD RGB Backlight** (16 × 2, I²C) next to the conveyor (`qc/lcd.py`, section `lcd` in config.json):
+  line 1 `Teil <n>` = running number of the inspected part (OK + NOK since the last counter reset), line 2 `OK` /
+  `NOT OK` / `Kein Teil`; backlight green / red / amber, blue while ready. Written by its own thread – the
+  inspection never waits for the display; a missing display is reported once and ignored. Texts and I²C addresses
+  are configurable (`rgb_address` 0x30 for display version 5, 0x62 for older ones). Counter reset and "batch
+  finished" start again at 0. Enabled in the preset `config.pi5_usb_c310.json`.
+- `qc lcd-test`: shows the three states on the display to check the wiring.
+
 ## 2.4.1 – manual check (2026-11-16)
 
 - **Capture mode `manual`** (`trigger.mode`, setup area → "Take the picture"): no belt – lay a part under the camera

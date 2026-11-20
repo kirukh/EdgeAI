@@ -41,6 +41,7 @@ from .config import AppConfig
 from .drift import DriftMonitor
 from .improvement import ModelImprovement
 from .inspection import inspect_part, merge_still
+from .lcd import PartDisplay
 from .model import MIN_REFERENCES, QCModel
 from .model_store import ModelStore
 from .results import OUTCOME_TEXT, ResultStore
@@ -107,6 +108,8 @@ class QCSystem:
         self.folder_interval = 1.0
         self.models = ModelStore(cfg.storage.models_dir)
         self.improve = ModelImprovement(cfg, self.models, self.lock, lambda: self.model, self._set_model, self.log)
+        self.lcd = PartDisplay(cfg.lcd, self.log)  # piece counter + result on the LCD (if enabled)
+        self.lcd.ready(self.part_count)
         for section in cfg.ignored:
             self.log("warn", f"config.json: section “{section}” belongs to the full version and is ignored.")
         if getattr(camera, "info", ""):
@@ -128,6 +131,11 @@ class QCSystem:
         logging.getLogger("qc").log({"error": logging.ERROR, "warn": logging.WARNING}.get(level, logging.INFO), text)
 
     # ------------------------------------------------------------------ properties
+    @property
+    def part_count(self) -> int:
+        """Inspected parts (OK + NOK) since the last counter reset – the piece counter."""
+        return int(self.results.counts["OK"] + self.results.counts["NOK"])
+
     @property
     def mm_per_px(self) -> float | None:
         """Scale of the working image; with digital zoom a pixel covers only the crop's fraction."""
@@ -154,6 +162,7 @@ class QCSystem:
         self._stop.set()
         for t in self._threads:
             t.join(timeout=3)
+        self.lcd.close()
         self.camera.close()
 
     def _read(self) -> np.ndarray | None:
@@ -533,6 +542,7 @@ class QCSystem:
             entry = self.results.add(res, shots[idx])
             if res.status != "NO_PART":
                 self.drift.update(res.measurements)
+            self.lcd.result(self.part_count, res.status)
         return entry
 
     # ------------------------------------------------------------------ models
@@ -601,6 +611,7 @@ class QCSystem:
             info = qa.create_archive(self.cfg.storage.results_dir, self.cfg.storage.archive_dir, label)
             self.results.reset()
             self.trigger.moving_captures = 0
+            self.lcd.ready(0)
         s = info["summary"]
         self.log(
             "ok",
@@ -613,6 +624,7 @@ class QCSystem:
         with self.lock:
             self.results.reset()
             self.trigger.moving_captures = 0
+            self.lcd.ready(0)
 
     def set_sim(
         self,

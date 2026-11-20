@@ -266,6 +266,31 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
         print(f"Table saved: {args.md}")
 
 
+def cmd_lcd_test(args: argparse.Namespace) -> int:
+    """Shows the three states on the LCD (settings from the lcd section of config.json, also if disabled)."""
+    from .lcd import COLOURS, GroveLCD, address, open_bus
+
+    c = AppConfig.load(args.config).lcd
+    print(f"LCD at I2C bus {c.bus}, text {c.lcd_address}, backlight {c.rgb_address}")
+    try:
+        lcd = GroveLCD(open_bus(c.bus), address(c.lcd_address), address(c.rgb_address))
+        for line2, state in ((c.ready_text, "idle"), (c.ok_text, "OK"), (c.nok_text, "NOK")):
+            lcd.write(c.line1.format(n=1), line2)
+            lcd.colour(COLOURS[state])
+            print(f"   shown: {c.line1.format(n=1)!r} / {line2!r}")
+            time.sleep(2)
+    except (OSError, RuntimeError) as e:
+        print(
+            f"LCD not reachable: {e}\n   Check the cable (SDA/SCL), I2C switched on (sudo raspi-config → Interface "
+            "Options → I2C) and the addresses:  i2cdetect -y 1",
+            file=sys.stderr,
+        )
+        return 1
+    if not c.enabled:
+        print('Works. Switch it on for the inspection in config.json:  "lcd": {"enabled": true}')
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Command line entry point (``qc`` / ``python main.py``); returns the exit code."""
     p = argparse.ArgumentParser(prog="qc", description="AI-assisted quality inspection of metal parts (Raspberry Pi)")
@@ -310,6 +335,9 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--n", type=int, default=30)
     method_args(b)
     b.set_defaults(func=cmd_benchmark)
+
+    lc = sub.add_parser("lcd-test", help="show a test text on the LCD display (Grove-LCD RGB Backlight)")
+    lc.set_defaults(func=cmd_lcd_test)
 
     g = sub.add_parser("generate", help="generate a synthetic test dataset")
     g.add_argument("--out", default="data/synth")
