@@ -34,7 +34,7 @@ class FakeBus:
 
 
 def test_lines_are_plain_ascii_and_16_characters():
-    assert fit("Teil 7") == "Teil 7          "
+    assert fit("Part 7") == "Part 7          "
     assert fit("Prüfung läuft – größer als sechzehn") == "Pruefung laeuft "
     assert fit("Grün → OK") == "Gruen ? OK      "
     assert address("0x3e") == 0x3E and address(48) == 0x30
@@ -44,12 +44,12 @@ def test_grove_lcd_writes_both_lines_and_only_what_changed():
     bus = FakeBus()
     lcd = GroveLCD(bus)
     assert bus.writes[-2:] == [(0x30, 0x00, 0x07), (0x30, 0x04, 0x15)]  # v5: reset, all LEDs on
-    lcd.write("Teil 1", "OK")
+    lcd.write("Part 1", "OK")
     lcd.colour((0, 160, 0))
-    assert bus.text() == fit("Teil 1") + fit("OK") and bus.colour() == (0, 160, 0)
+    assert bus.text() == fit("Part 1") + fit("OK") and bus.colour() == (0, 160, 0)
     assert (0x3E, 0x80, 0xC0) in bus.writes  # cursor to line 2
     bus.writes.clear()
-    lcd.write("Teil 1", "NOT OK")  # line 1 unchanged → not sent again
+    lcd.write("Part 1", "NOT OK")  # line 1 unchanged → not sent again
     assert bus.text() == fit("NOT OK")
 
 
@@ -72,13 +72,13 @@ def test_part_display_shows_counter_result_and_colour():
     disp = PartDisplay(LCDConfig(enabled=True), lambda *_: None, lambda c: GroveLCD(bus))
     try:
         disp.result(12, "NOK")
-        wait(lambda: disp.shown == ("Teil 12", "NOT OK", "NOK"), 5)
+        wait(lambda: disp.shown == ("Part 12", "NOT OK", "NOK"), 5)
         assert bus.colour() == COLOURS["NOK"]
         disp.result(13, "OK")
-        wait(lambda: disp.shown == ("Teil 13", "OK", "OK"), 5)
+        wait(lambda: disp.shown == ("Part 13", "OK", "OK"), 5)
         assert bus.colour() == COLOURS["OK"]
         disp.ready(0)
-        wait(lambda: disp.shown == ("Teil 0", "Bereit", "idle"), 5)
+        wait(lambda: disp.shown == ("Part 0", "Ready", "idle"), 5)
     finally:
         disp.close()
 
@@ -88,12 +88,12 @@ def test_result_turns_blue_when_nothing_happens():
     disp = PartDisplay(LCDConfig(enabled=True, result_seconds=0.3), lambda *_: None, lambda c: GroveLCD(bus))
     try:
         disp.result(5, "OK")
-        wait(lambda: disp.shown == ("Teil 5", "OK", "OK"), 5)
+        wait(lambda: disp.shown == ("Part 5", "OK", "OK"), 5)
         assert bus.colour() == COLOURS["OK"]
-        wait(lambda: disp.shown == ("Teil 5", "Bereit", "idle"), 5)  # no new part → blue
+        wait(lambda: disp.shown == ("Part 5", "Ready", "idle"), 5)  # no new part → blue
         assert bus.colour() == COLOURS["idle"] == (0, 0, 255)
         disp.stopped(5)
-        wait(lambda: disp.shown == ("Teil 5", "Gestoppt", "idle"), 5)
+        wait(lambda: disp.shown == ("Part 5", "Stopped", "idle"), 5)
     finally:
         disp.close()
 
@@ -103,7 +103,7 @@ def test_display_is_reset_at_start_and_dark_at_the_end():
     bus = FakeBus()
     disp = PartDisplay(LCDConfig(enabled=True), lambda *_: None, lambda c: GroveLCD(bus))
     disp.ready(0)
-    wait(lambda: disp.shown == ("Teil 0", "Bereit", "idle"), 5)
+    wait(lambda: disp.shown == ("Part 0", "Ready", "idle"), 5)
     first = bus.writes[:6]
     assert [w for w in first if w[0] == 0x3E][:3] == [(0x3E, 0x80, 0x28)] * 3  # power-on initialisation
     assert (0x3E, 0x80, 0x01) in bus.writes  # cleared
@@ -158,9 +158,9 @@ def test_inspection_counts_parts_on_the_display(make_system):
     wait(lambda: s.part_count >= 3, 120)
     with s.lock:  # no further result while checking
         last = s.results.history[0]
-        want = (f"Teil {s.part_count}", "OK" if last["status"] == "OK" else "NOT OK", last["status"])
+        want = (f"Part {s.part_count}", "OK" if last["status"] == "OK" else "NOT OK", last["status"])
         wait(lambda: s.lcd.shown == want, 10)
         s.stop_inspection()
-    wait(lambda: s.lcd.shown == (f"Teil {s.part_count}", "Gestoppt", "idle"), 10)
+    wait(lambda: s.lcd.shown == (f"Part {s.part_count}", "Stopped", "idle"), 10)
     s.reset_counts()
-    wait(lambda: s.lcd.shown == ("Teil 0", "Bereit", "idle"), 10)
+    wait(lambda: s.lcd.shown == ("Part 0", "Ready", "idle"), 10)

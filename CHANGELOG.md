@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.5.1 – everything in English (2026-11-20)
+
+- LCD texts are English by default: `Part <n>` / `OK` / `NOT OK` / `No part` / `Ready` / `Stopped` (still
+  configurable in the `lcd` section of config.json).
+- The installation guide is now English and up to date (`docs/INSTALL.md`, replaces `docs/INSTALL.de.md`): git
+  clone, Raspberry Pi 5 + USB camera, LCD display, capture modes, updating with `git pull`.
+
 ## 2.5.0 – LCD piece counter (2026-11-20)
 
 - Fix: the backlight of display version 5 (address 0x30) stayed dark or blinked. Its chip has other registers than

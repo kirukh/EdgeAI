@@ -1,12 +1,12 @@
 """Grove-LCD RGB Backlight (16 × 2 characters, I²C) next to the conveyor: piece counter and result.
 
     ┌────────────────┐
-    │Teil 128        │   line 1: running number of the inspected part (OK + NOK since the last reset)
+    │Part 128        │   line 1: running number of the inspected part (OK + NOK since the last reset)
     │OK              │   line 2: result of that part – backlight green (OK) or red (NOT OK)
     └────────────────┘
 
 Backlight: green = OK, red = NOT OK, blue = nothing happening (inspection stopped, waiting for the
-first part, or no new part for ``lcd.result_seconds`` – then line 2 shows "Bereit" again).
+first part, or no new part for ``lcd.result_seconds`` – then line 2 shows "Ready" again).
 
 The display sits on the Pi's I²C bus 1 (Grove pins SDA/SCL, 3.3 V or 5 V, GND). It has two
 chips: the text controller (address 0x3e) and the backlight. The backlight chip differs between
@@ -166,7 +166,7 @@ class PartDisplay:
         self._show(self.cfg.line1.format(n=count), self.cfg.ready_text, "idle")
 
     def stopped(self, count: int) -> None:
-        """Inspection stopped / nothing running: blue, line 2 "Gestoppt"."""
+        """Inspection stopped / nothing running: blue, line 2 "Stopped"."""
         self._show(self.cfg.line1.format(n=count), self.cfg.stopped_text, "idle")
 
     def result(self, count: int, status: str) -> None:

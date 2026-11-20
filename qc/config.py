@@ -267,14 +267,14 @@ class LCDConfig:
     bus: int = 1  # I²C bus of the Raspberry Pi (pins 3/5 = bus 1)
     lcd_address: int | str = "0x3e"  # text controller
     rgb_address: int | str = "0x30"  # backlight: 0x30 = display version 5, 0x62 = older versions
-    line1: str = "Teil {n}"  # {n} = running number of the inspected part
+    line1: str = "Part {n}"  # {n} = running number of the inspected part
     ok_text: str = "OK"
     nok_text: str = "NOT OK"
-    no_part_text: str = "Kein Teil"
-    ready_text: str = "Bereit"
-    stopped_text: str = "Gestoppt"
+    no_part_text: str = "No part"
+    ready_text: str = "Ready"
+    stopped_text: str = "Stopped"
     # OK (green) / NOT OK (red) stays this long; without a new part the display then turns blue
-    # ("Bereit"). 0 = the result stays until the next part.
+    # ("Ready"). 0 = the result stays until the next part.
     result_seconds: float = 5.0
 
 

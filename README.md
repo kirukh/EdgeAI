@@ -250,8 +250,8 @@ field of view; the zoom of a part type is taken into account automatically. Abso
 
 ## Running on the Raspberry Pi
 
-**Installation (once)** – Raspberry Pi OS (Bookworm or newer), project unzipped e.g. to `~/pi_qc`. Step-by-step
-guide in German: [`docs/INSTALL.de.md`](docs/INSTALL.de.md).
+**Installation (once)** – Raspberry Pi OS (Bookworm or newer), project cloned or unzipped e.g. to `~/EdgeAI`. Step-by-step
+guide: [`docs/INSTALL.md`](docs/INSTALL.md).
 
 ```bash
 cd ~/pi_qc
